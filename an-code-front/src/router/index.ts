@@ -22,6 +22,24 @@ const router = createRouter({
         showInMenu: true,
       },
     },
+    {
+      path: '/user/login',
+      name: 'user-login',
+      component: () => import('../views/user/LoginView.vue'),
+      meta: {
+        title: '登录',
+        showInMenu: false,
+      },
+    },
+    {
+      path: '/user/register',
+      name: 'user-register',
+      component: () => import('../views/user/RegisterView.vue'),
+      meta: {
+        title: '注册',
+        showInMenu: false,
+      },
+    },
   ],
 })
 

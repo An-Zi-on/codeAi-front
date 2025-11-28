@@ -15,18 +15,27 @@
         />
       </div>
       <div class="header-right">
-        <a-button type="primary" @click="handleLogin">
+        <a-button type="primary" @click="handleLogin" v-if="!isLoggedIn">
           登录
         </a-button>
+        <a-avatar v-else size="large" :src="userAvatarSrc">
+          <template #icon>
+            <UserOutlined />
+          </template>
+        </a-avatar>
       </div>
     </div>
   </a-layout-header>
 </template>
 
 <script setup lang="ts">
+import { UserOutlined } from '@ant-design/icons-vue'
 import { computed } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import type { MenuProps } from 'ant-design-vue'
+import { storeToRefs } from 'pinia'
+import { onMounted } from 'vue'
+import { useCounterStore } from '../stores/counter.ts'
 
 const router = useRouter()
 const route = useRoute()
@@ -51,21 +60,42 @@ const handleMenuClick: MenuProps['onClick'] = (e) => {
   router.push(e.key as string)
 }
 
+const userStore = useCounterStore()
+const { loginUser } = storeToRefs(userStore)
+
+const fallbackAvatar = new URL('../assets/logo.jpg', import.meta.url).href
+
+const isLoggedIn = computed(() => loginUser.value !== null)
+
+const userAvatarSrc = computed(() => {
+  return loginUser.value?.userAvatar || fallbackAvatar
+})
+
+onMounted(() => {
+  if (!loginUser.value) {
+    userStore.updateCurrentUser().catch(() => {
+      // ignore error, fallback to null state
+    })
+  }
+})
+
 // 登录按钮点击事件
 const handleLogin = () => {
-  // TODO: 实现登录逻辑
-  console.log('点击登录')
+  router.push('/user/login')
 }
 </script>
 
 <style scoped>
 .global-header {
-  background: #fff;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  background: linear-gradient(180deg, rgba(249, 251, 255, 0.95), rgba(255, 255, 255, 0.9));
+  backdrop-filter: blur(14px);
+  border-bottom: 1px solid rgba(114, 131, 191, 0.12);
+  box-shadow: 0 6px 20px rgba(15, 23, 42, 0.05);
   padding: 0;
-  position: sticky;
-  top: 0;
-  z-index: 1000;
+  position: relative;
+  z-index: 10;
+  transition: background 0.3s ease, border-color 0.3s ease, box-shadow 0.3s ease;
+  min-height: var(--layout-header-height, 64px);
 }
 
 .header-content {
@@ -73,8 +103,8 @@ const handleLogin = () => {
   justify-content: space-between;
   align-items: center;
   width: 100%;
-  padding: 0 24px;
-  height: 64px;
+  padding: 0 clamp(16px, 3vw, 32px);
+  height: var(--layout-header-height, 64px);
 }
 
 .header-left {
@@ -91,8 +121,9 @@ const handleLogin = () => {
   height: 40px;
   width: 40px;
   overflow: hidden;
-  border-radius: 4px;
+  border-radius: 8px;
   flex-shrink: 0;
+  background: linear-gradient(130deg, rgba(25, 91, 255, 0.18), rgba(132, 94, 247, 0.15));
 }
 
 .logo {
@@ -106,7 +137,7 @@ const handleLogin = () => {
 .site-title {
   font-size: 20px;
   font-weight: 600;
-  color: #1890ff;
+  color: #1d4ed8;
   white-space: nowrap;
   margin-right: 8px;
   flex-shrink: 0;
@@ -114,8 +145,9 @@ const handleLogin = () => {
 
 .header-menu {
   border-bottom: none;
-  line-height: 64px;
+  line-height: var(--layout-header-height, 64px);
   flex-shrink: 0;
+  background: transparent;
 }
 
 .header-right {

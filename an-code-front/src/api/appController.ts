@@ -1,6 +1,6 @@
 // @ts-ignore
 /* eslint-disable */
-import request from '@/request'
+import request from '../request.ts'
 
 /** 此处后端没有提供注释 GET /app/admin/${param0} */
 export async function adminGetDetail(

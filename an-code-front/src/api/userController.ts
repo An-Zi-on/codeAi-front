@@ -1,9 +1,9 @@
 // @ts-ignore
 /* eslint-disable */
-import request from '@/request'
+import request from '../request.ts'
 
 /** 此处后端没有提供注释 GET /user/current */
-export async function getInfo(options?: { [key: string]: any }) {
+export async function current(options?: { [key: string]: any }) {
   return request<API.BaseResponseUserVO>('/user/current', {
     method: 'GET',
     ...(options || {}),

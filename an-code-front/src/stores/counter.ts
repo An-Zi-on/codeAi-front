@@ -1,12 +1,32 @@
-import { ref, computed } from 'vue'
+import { ref } from 'vue'
 import { defineStore } from 'pinia'
+import type { UserVo } from '@/type/types'
+import { current } from '@/api/userController'
 
-export const useCounterStore = defineStore('counter', () => {
-  const count = ref(0)
-  const doubleCount = computed(() => count.value * 2)
-  function increment() {
-    count.value++
+export const useCounterStore = defineStore('currentUser', () => {
+  const loginUser = ref<UserVo | null>(null)
+  const loading = ref(false)
+
+  async function updateCurrentUser() {
+    try {
+      loading.value = true
+      const response = await current()
+      if (response.data?.code === 0 && response.data?.data) {
+        loginUser.value = response.data.data
+      } else {
+        loginUser.value = null
+      }
+    } catch (error) {
+      loginUser.value = null
+      throw error
+    } finally {
+      loading.value = false
+    }
   }
 
-  return { count, doubleCount, increment }
+  function resetCurrentUser() {
+    loginUser.value = null
+  }
+
+  return { loginUser, loading, updateCurrentUser, resetCurrentUser }
 })
