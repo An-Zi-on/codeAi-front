@@ -1,7 +1,7 @@
 import { ref } from 'vue'
 import { defineStore } from 'pinia'
-import type { UserVo } from '@/type/types'
-import { current } from '@/api/userController'
+import type { UserVo } from '../type/types.ts'
+import { current,loginOut} from '../api/userController.ts'
 
 export const useCounterStore = defineStore('currentUser', () => {
   const loginUser = ref<UserVo | null>(null)
@@ -24,9 +24,19 @@ export const useCounterStore = defineStore('currentUser', () => {
     }
   }
 
-  function resetCurrentUser() {
-    loginUser.value = null
+  async function logOut() {
+    const response = await loginOut()
+    try {
+      if (response.data?.code === 0) {
+        loading.value = true;
+        loginUser.value = null
+      }else{
+       loading.value = false
+      }
+    }catch(error) {
+      loading.value = false
+    }
   }
 
-  return { loginUser, loading, updateCurrentUser, resetCurrentUser }
+  return { loginUser, loading, updateCurrentUser, logOut }
 })

@@ -23,6 +23,34 @@ const router = createRouter({
       },
     },
     {
+      path: '/app/chat/:id',
+      name: 'app-chat',
+      component: () => import('../views/app/ChatView.vue'),
+      meta: {
+        title: '应用对话',
+        showInMenu: false,
+      },
+    },
+    {
+      path: '/app/edit/:id',
+      name: 'app-edit',
+      component: () => import('../views/app/AppEditView.vue'),
+      meta: {
+        title: '编辑应用',
+        showInMenu: false,
+      },
+    },
+    {
+      path: '/admin/apps',
+      name: 'admin-apps',
+      component: () => import('../views/app/AdminAppManageView.vue'),
+      meta: {
+        title: '应用管理',
+        showInMenu: true,
+        requireAdmin: true,
+      },
+    },
+    {
       path: '/user/login',
       name: 'user-login',
       component: () => import('../views/user/LoginView.vue'),
@@ -41,6 +69,26 @@ const router = createRouter({
       },
     },
   ],
+})
+
+// 路由守卫 - 检查管理员权限
+router.beforeEach((to, from, next) => {
+  if (to.meta.requireAdmin) {
+    // 动态导入 store 以避免循环依赖
+    import('../stores/counter').then(({ useCounterStore }) => {
+      const userStore = useCounterStore()
+      if (userStore.loginUser?.userRole === 'admin') {
+        next()
+      } else {
+        next({ path: '/', replace: true })
+        import('ant-design-vue').then(({ message }) => {
+          message.warning('需要管理员权限')
+        })
+      }
+    })
+  } else {
+    next()
+  }
 })
 
 export default router

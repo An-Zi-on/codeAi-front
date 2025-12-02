@@ -13,3 +13,6 @@
   }
 }
 </style>
+<script setup lang="ts">
+import LogoutOutlined from '@ant-design/icons-vue'
+</script>
