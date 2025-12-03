@@ -42,12 +42,14 @@
   background: linear-gradient(180deg, rgba(249, 250, 255, 0.95) 0%, rgba(233, 236, 246, 0.98) 95%);
   backdrop-filter: blur(18px);
   padding: 12px clamp(20px, 4vw, 48px);
-  position: relative;
+  position: fixed;
   bottom: 0;
+  left: 0;
   width: 100%;
   border-top: 1px solid rgba(15, 23, 42, 0.08);
   box-shadow: 0 -24px 45px rgba(15, 23, 42, 0.08);
   min-height: var(--layout-footer-height, 70px);
+  z-index: 1000;
 }
 
 .footer-content {

@@ -140,8 +140,12 @@ const handleLogout = async () => {
   border-bottom: 1px solid rgba(114, 131, 191, 0.12);
   box-shadow: 0 6px 20px rgba(15, 23, 42, 0.05);
   padding: 0;
-  position: relative;
-  z-index: 10;
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 1000;
+  width: 100%;
   transition: background 0.3s ease, border-color 0.3s ease, box-shadow 0.3s ease;
   min-height: var(--layout-header-height, 64px);
 }

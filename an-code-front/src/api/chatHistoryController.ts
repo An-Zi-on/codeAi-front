@@ -1,6 +1,6 @@
 // @ts-ignore
 /* eslint-disable */
-import request from '../request.ts'
+import request from '../request'
 
 /** 此处后端没有提供注释 POST /chat/history/admin/list/page/vo */
 export async function listAllChatHistoryByPageForAdmin(
@@ -8,6 +8,21 @@ export async function listAllChatHistoryByPageForAdmin(
   options?: { [key: string]: any }
 ) {
   return request<API.BaseResponsePageChatHistory>('/chat/history/admin/list/page/vo', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    data: body,
+    ...(options || {}),
+  })
+}
+
+/** 此处后端没有提供注释 POST /chat/history/history/lastTime */
+export async function getLastLocalDateTime(
+  body: API.ByIdRequest,
+  options?: { [key: string]: any }
+) {
+  return request<API.BaseResponseLocalDateTime>('/chat/history/history/lastTime', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',

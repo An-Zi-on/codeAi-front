@@ -95,6 +95,12 @@ declare namespace API {
     message?: string
   }
 
+  type BaseResponseLocalDateTime = {
+    code?: number
+    data?: string
+    message?: string
+  }
+
   type BaseResponseLong = {
     code?: number
     data?: number
@@ -135,6 +141,10 @@ declare namespace API {
     code?: number
     data?: UserVO
     message?: string
+  }
+
+  type ByIdRequest = {
+    id?: number
   }
 
   type ChatHistory = {
@@ -194,8 +204,8 @@ declare namespace API {
   }
 
   type FilterRegistration = {
-    urlPatternMappings?: string[]
     servletNameMappings?: string[]
+    urlPatternMappings?: string[]
     name?: string
     className?: string
     initParameters?: Record<string, any>
@@ -220,26 +230,26 @@ declare namespace API {
   type HttpServletRequest = {
     method?: string
     contextPath?: string
+    requestedSessionIdFromCookie?: boolean
+    requestedSessionIdFromURL?: boolean
     session?: HttpSession
-    remoteUser?: string
     headerNames?: Record<string, any>
+    remoteUser?: string
     userPrincipal?: { name?: string }
     authType?: string
     requestURI?: string
-    pathTranslated?: string
-    queryString?: string
-    pathInfo?: string
-    servletPath?: string
     trailerFields?: Record<string, any>
     requestURL?: { length?: number; empty?: boolean }
-    requestedSessionId?: string
-    requestedSessionIdValid?: boolean
+    servletPath?: string
+    pathInfo?: string
+    queryString?: string
+    pathTranslated?: string
+    cookies?: Cookie[]
+    parts?: Part[]
     trailerFieldsReady?: boolean
     httpServletMapping?: HttpServletMapping
-    requestedSessionIdFromURL?: boolean
-    requestedSessionIdFromCookie?: boolean
-    parts?: Part[]
-    cookies?: Cookie[]
+    requestedSessionIdValid?: boolean
+    requestedSessionId?: string
     localName?: string
     localPort?: number
     contentType?: string
@@ -263,28 +273,28 @@ declare namespace API {
       iso3Country?: string
     }
     contentLength?: number
-    contentLengthLong?: number
     attributeNames?: Record<string, any>
-    servletContext?: ServletContext
     reader?: Record<string, any>
+    contentLengthLong?: number
+    servletContext?: ServletContext
     parameterNames?: Record<string, any>
-    protocolRequestId?: string
-    characterEncoding?: string
-    servletConnection?: ServletConnection
-    secure?: boolean
     locales?: Record<string, any>
-    dispatcherType?: 'FORWARD' | 'INCLUDE' | 'REQUEST' | 'ASYNC' | 'ERROR'
-    requestId?: string
+    secure?: boolean
+    protocolRequestId?: string
+    servletConnection?: ServletConnection
+    characterEncoding?: string
     serverPort?: number
     remoteHost?: string
-    localAddr?: string
-    asyncStarted?: boolean
-    parameterMap?: Record<string, any>
-    serverName?: string
     remoteAddr?: string
     remotePort?: number
     asyncSupported?: boolean
+    localAddr?: string
+    dispatcherType?: 'FORWARD' | 'INCLUDE' | 'REQUEST' | 'ASYNC' | 'ERROR'
     asyncContext?: AsyncContext
+    asyncStarted?: boolean
+    serverName?: string
+    parameterMap?: Record<string, any>
+    requestId?: string
   }
 
   type HttpSession = {
@@ -292,30 +302,30 @@ declare namespace API {
     creationTime?: number
     attributeNames?: Record<string, any>
     servletContext?: ServletContext
-    lastAccessedTime?: number
-    maxInactiveInterval?: number
     new?: boolean
+    maxInactiveInterval?: number
+    lastAccessedTime?: number
   }
 
   type JspConfigDescriptor = {
-    jspPropertyGroups?: JspPropertyGroupDescriptor[]
     taglibs?: TaglibDescriptor[]
+    jspPropertyGroups?: JspPropertyGroupDescriptor[]
   }
 
   type JspPropertyGroupDescriptor = {
     buffer?: string
     defaultContentType?: string
     urlPatterns?: string[]
-    isXml?: string
-    deferredSyntaxAllowedAsLiteral?: string
-    errorOnUndeclaredNamespace?: string
-    trimDirectiveWhitespaces?: string
     includeCodas?: string[]
+    pageEncoding?: string
     includePreludes?: string[]
     elIgnored?: string
-    pageEncoding?: string
     errorOnELNotFound?: string
     scriptingInvalid?: string
+    errorOnUndeclaredNamespace?: string
+    deferredSyntaxAllowedAsLiteral?: string
+    trimDirectiveWhitespaces?: string
+    isXml?: string
   }
 
   type PageAppVO = {
@@ -388,8 +398,8 @@ declare namespace API {
   type ServerSentEventString = true
 
   type ServletConnection = {
-    connectionId?: string
     protocol?: string
+    connectionId?: string
     secure?: boolean
     protocolConnectionId?: string
   }
@@ -453,22 +463,22 @@ declare namespace API {
     minorVersion?: number
     attributeNames?: Record<string, any>
     contextPath?: string
-    requestCharacterEncoding?: string
-    effectiveSessionTrackingModes?: ('COOKIE' | 'URL' | 'SSL')[]
-    defaultSessionTrackingModes?: ('COOKIE' | 'URL' | 'SSL')[]
-    responseCharacterEncoding?: string
-    sessionTimeout?: number
-    serverInfo?: string
     initParameterNames?: Record<string, any>
-    filterRegistrations?: Record<string, any>
-    jspConfigDescriptor?: JspConfigDescriptor
-    virtualServerName?: string
-    servletRegistrations?: Record<string, any>
     effectiveMajorVersion?: number
-    sessionCookieConfig?: SessionCookieConfig
-    sessionTrackingModes?: ('COOKIE' | 'URL' | 'SSL')[]
     effectiveMinorVersion?: number
     servletContextName?: string
+    servletRegistrations?: Record<string, any>
+    sessionTrackingModes?: ('COOKIE' | 'URL' | 'SSL')[]
+    virtualServerName?: string
+    jspConfigDescriptor?: JspConfigDescriptor
+    filterRegistrations?: Record<string, any>
+    sessionCookieConfig?: SessionCookieConfig
+    effectiveSessionTrackingModes?: ('COOKIE' | 'URL' | 'SSL')[]
+    responseCharacterEncoding?: string
+    requestCharacterEncoding?: string
+    defaultSessionTrackingModes?: ('COOKIE' | 'URL' | 'SSL')[]
+    sessionTimeout?: number
+    serverInfo?: string
   }
 
   type ServletInputStream = {
@@ -514,32 +524,33 @@ declare namespace API {
       iso3Country?: string
     }
     contentLength?: number
-    contentLengthLong?: number
     attributeNames?: Record<string, any>
-    servletContext?: ServletContext
     reader?: Record<string, any>
+    contentLengthLong?: number
+    servletContext?: ServletContext
     parameterNames?: Record<string, any>
-    protocolRequestId?: string
-    characterEncoding?: string
-    servletConnection?: ServletConnection
-    secure?: boolean
     locales?: Record<string, any>
-    dispatcherType?: 'FORWARD' | 'INCLUDE' | 'REQUEST' | 'ASYNC' | 'ERROR'
-    requestId?: string
+    secure?: boolean
+    protocolRequestId?: string
+    servletConnection?: ServletConnection
+    characterEncoding?: string
     serverPort?: number
     remoteHost?: string
-    localAddr?: string
-    asyncStarted?: boolean
-    parameterMap?: Record<string, any>
-    serverName?: string
     remoteAddr?: string
     remotePort?: number
     asyncSupported?: boolean
+    localAddr?: string
+    dispatcherType?: 'FORWARD' | 'INCLUDE' | 'REQUEST' | 'ASYNC' | 'ERROR'
     asyncContext?: AsyncContext
+    asyncStarted?: boolean
+    serverName?: string
+    parameterMap?: Record<string, any>
+    requestId?: string
   }
 
   type ServletResponse = {
     contentType?: string
+    outputStream?: ServletOutputStream
     locale?: {
       language?: string
       displayName?: string
@@ -556,12 +567,11 @@ declare namespace API {
       iso3Language?: string
       iso3Country?: string
     }
-    outputStream?: ServletOutputStream
     contentLength?: number
     bufferSize?: number
-    contentLengthLong?: number
-    characterEncoding?: string
     writer?: Record<string, any>
+    characterEncoding?: string
+    contentLengthLong?: number
     committed?: boolean
   }
 

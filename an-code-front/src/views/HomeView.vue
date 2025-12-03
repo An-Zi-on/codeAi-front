@@ -254,17 +254,17 @@ const handleTabChange = (key: string) => {
 }
 
 // 查看应用详情
-const handleViewApp = (appId: number) => {
+const handleViewApp = (appId: string) => {
   router.push(`/app/chat/${appId}`)
 }
 
 // 编辑应用
-const handleEditApp = (appId: number) => {
+const handleEditApp = (appId: string) => {
   router.push(`/app/edit/${appId}`)
 }
 
 // 删除应用
-const handleDeleteApp = async (appId: number) => {
+const handleDeleteApp = async (appId: string) => {
   try {
     const response = await deleteMyApp({ id: convertIdToString(appId) as any })
     if (response.data?.code === 0) {

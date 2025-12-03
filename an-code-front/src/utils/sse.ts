@@ -28,18 +28,29 @@ export function createSSEConnection(
   options: SSEOptions = {}
 ): EventSource {
   // 构建查询字符串
-  const queryString = new URLSearchParams(
-    Object.entries(params).reduce((acc, [key, value]) => {
-      if (value !== undefined && value !== null) {
-        acc[key] = String(value)
-      }
-      return acc
-    }, {} as Record<string, string>)
-  ).toString()
+  const queryParams: Record<string, string> = {}
+  Object.entries(params).forEach(([key, value]) => {
+    if (value !== undefined && value !== null) {
+      queryParams[key] = String(value)
+    }
+  })
+  
+  const queryString = new URLSearchParams(queryParams).toString()
 
-  // 如果 URL 不是完整路径，添加 baseURL
-  const baseURL = 'http://localhost:8102/api'
-  const fullUrl = url.startsWith('http') ? url : `${baseURL}${url}${queryString ? `?${queryString}` : ''}`
+  // 构建完整 URL
+  let fullUrl: string
+  if (url.startsWith('http')) {
+    // 如果已经是完整 URL，直接使用并添加查询参数
+    fullUrl = queryString ? `${url}?${queryString}` : url
+  } else {
+    // 如果不是完整 URL，添加 baseURL 和查询参数
+    const baseURL = 'http://localhost:8102/api'
+    fullUrl = queryString ? `${baseURL}${url}?${queryString}` : `${baseURL}${url}`
+  }
+
+  // 调试日志
+  console.log('SSE URL:', fullUrl)
+  console.log('SSE Params:', queryParams)
 
   // 创建 EventSource 实例
   const eventSource = new EventSource(fullUrl, {
@@ -59,6 +70,11 @@ export function createSSEConnection(
       console.error('SSE message parse error:', error)
     }
   }
+
+  // 处理自定义事件（如 done 事件）
+  eventSource.addEventListener('done', (event: any) => {
+    options.onComplete?.()
+  })
 
   // 处理错误
   eventSource.onerror = (error) => {

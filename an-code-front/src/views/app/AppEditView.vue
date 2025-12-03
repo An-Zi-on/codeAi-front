@@ -61,15 +61,14 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, computed } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import type { UploadProps } from 'ant-design-vue'
 import { message } from 'ant-design-vue'
 import { PlusOutlined } from '@ant-design/icons-vue'
-import type { UploadProps } from 'ant-design-vue'
-import { getMyApp, updateMyApp, adminGetDetail, adminUpdate } from '@/api/appController'
+import { adminGetDetail, adminUpdate, getMyApp, updateMyApp } from '@/api/appController'
 import { useCounterStore } from '@/stores/counter'
 import { convertIdToString } from '@/utils/idConverter'
-import type { AppVO } from '@/api/typings'
 
 const route = useRoute()
 const router = useRouter()
@@ -78,10 +77,7 @@ const userStore = useCounterStore()
 const appId = computed(() => {
   const id = route.params.id
   if (typeof id === 'string') {
-    const numId = Number(id)
-    if (!isNaN(numId) && numId > 0) {
-      return numId
-    }
+    return id
   }
   return 0
 })
@@ -104,7 +100,7 @@ const rules = {
 
 // 加载应用信息
 const loadAppInfo = async () => {
-  if (!appId.value || appId.value === 0) {
+  if (!appId.value || appId.value === "0") {
     message.error('应用ID无效')
     router.push('/')
     return
@@ -275,4 +271,3 @@ onMounted(() => {
   object-fit: cover;
 }
 </style>
-
