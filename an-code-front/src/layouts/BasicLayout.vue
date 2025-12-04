@@ -23,18 +23,14 @@ import GlobalFooter from '@/components/GlobalFooter.vue'
 
 .basic-layout {
   min-height: 100vh;
-  display: flex;
-  flex-direction: column;
   background: radial-gradient(circle at 20% 0%, rgba(120, 147, 255, 0.15), transparent 55%),
     radial-gradient(circle at 80% 10%, rgba(120, 147, 255, 0.08), transparent 45%),
     var(--layout-surface);
-  padding-top: var(--layout-header-height);
-  padding-bottom: var(--layout-footer-height);
 }
 
 .layout-content {
   flex: 1;
-  min-height: calc(100vh - var(--layout-header-height) - var(--layout-footer-height));
+  height: calc(100vh - var(--layout-header-height) - var(--layout-footer-height));
   padding: clamp(10px, 1.8vw, 20px);
   display: flex;
   flex-direction: column;

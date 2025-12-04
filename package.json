@@ -1,6 +1,8 @@
 {
   "dependencies": {
     "@ant-design/icons-vue": "^7.0.1",
-    "ant-design-vue": "^4.2.6"
+    "ant-design-vue": "^4.2.6",
+    "highlight.js": "^11.11.1",
+    "marked": "^17.0.1"
   }
 }

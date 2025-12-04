@@ -6,6 +6,7 @@
       </div>
       <div class="header-right">
         <a-space>
+          <a-button @click="showAppDetailModal = true">应用详情</a-button>
           <a-button @click="togglePreview">{{ previewEnabled ? '隐藏预览' : '显示预览' }}</a-button>
           <a-button type="primary" :loading="deploying" :disabled="!canDeploy" @click="handleDeploy">
             部署应用
@@ -14,8 +15,8 @@
       </div>
     </div>
 
-    <div class="chat-content">
-      <div class="chat-panel">
+    <div class="chat-content" :class="{ 'with-preview': shouldShowPreview }">
+      <div class="chat-panel" :class="{ 'centered': !shouldShowPreview }">
         <div class="messages-container" ref="messagesContainerRef">
           <div v-if="historyLoading" class="empty-messages">
             <a-spin size="large" />
@@ -34,7 +35,7 @@
                   <UserOutlined />
                 </template>
               </a-avatar>
-              <a-avatar v-else :size="32" style="background-color: #1890ff">
+              <a-avatar v-else :size="40" :src="aiAvatarSrc" @error="handleAvatarError">
                 <template #icon>
                   <RobotOutlined />
                 </template>
@@ -42,11 +43,18 @@
             </div>
             <div class="message-content">
               <div
+                v-if="message.role === 'user'"
+                class="message-text"
+                v-html="formatMessage(message.content)"
+              ></div>
+              <div
+                v-else
                 class="message-text markdown-content"
                 v-html="renderMarkdown(message.content)"
               ></div>
               <div v-if="message.role === 'ai' && message.streaming" class="message-streaming">
                 <a-spin size="small" />
+                <span>AI 正在思考...</span>
               </div>
             </div>
           </div>
@@ -55,9 +63,9 @@
         <div class="input-container">
           <a-input
             v-model:value="inputText"
-            placeholder="输入你的消息..."
+            placeholder="请描述你想生成的网站，越详细效果越好哦"
             size="large"
-            :disabled="streaming"
+            :disabled="streaming || !canSendMessage"
             @press-enter="handleSendMessage"
           >
             <template #suffix>
@@ -89,6 +97,15 @@
         </div>
       </div>
     </div>
+
+    <AppDetailModal
+      v-model:open="showAppDetailModal"
+      :app-info="appInfo"
+      :user-name="userName"
+      :user-avatar="userAvatar"
+      @edit="handleEditApp"
+      @delete="handleDeleteApp"
+    />
   </div>
 </template>
 
@@ -97,15 +114,37 @@ import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { message } from 'ant-design-vue'
 import { RobotOutlined, UserOutlined } from '@ant-design/icons-vue'
+// 动态导入 marked 和 highlight.js，避免未安装时的错误
+let marked: any = null
+let hljs: any = null
+
+// 尝试导入 marked 和 highlight.js
+import('marked')
+  .then((module) => {
+    marked = module.marked
+    return import('highlight.js')
+  })
+  .then((module) => {
+    hljs = module.default
+    import('highlight.js/styles/github-dark.css').catch(() => {
+      console.warn('Highlight.js styles not found')
+    })
+  })
+  .catch((error) => {
+    console.warn('Markdown libraries not installed, using fallback renderer:', error)
+  })
 import { getMyApp } from '@/api/appController'
 import { deployApp } from '@/api/deployController'
 import { getLastLocalDateTime, pageByApp, saveMessage } from '@/api/chatHistoryController'
 import { closeSSEConnection, createSSEConnection, type SSEMessage } from '@/utils/sse'
 import { convertIdToString } from '@/utils/idConverter'
+import { useCounterStore } from '@/stores/counter'
+import AppDetailModal from '@/components/AppDetailModal.vue'
 import type { AppVO } from '@/api/typings'
 
 const route = useRoute()
 const router = useRouter()
+const userStore = useCounterStore()
 
 const appId = computed(() => {
   const id = route.params.id
@@ -114,6 +153,30 @@ const appId = computed(() => {
   }
   return 0
 })
+
+// 检查是否是查看模式（不自动发送消息）
+const isViewMode = computed(() => route.query.view === '1')
+
+// 检查是否可以发送消息（只有自己的应用或管理员可以）
+const canSendMessage = computed(() => {
+  if (!appInfo.value || !userStore.loginUser) return false
+  return (
+    appInfo.value.userId === userStore.loginUser.id ||
+    userStore.loginUser.userRole === 'admin'
+  )
+})
+
+// AI 头像
+const aiAvatarSrc = ref<string | undefined>('/src/assets/aiAvatar.png')
+
+const handleAvatarError = () => {
+  aiAvatarSrc.value = undefined
+}
+
+// 应用详情弹窗
+const showAppDetailModal = ref(false)
+const userName = ref('')
+const userAvatar = ref('')
 
 // 应用信息
 const appInfo = ref<AppVO | null>(null)
@@ -161,10 +224,44 @@ const escapeHtml = (unsafe: string) => {
     .replace(/'/g, '&#039;')
 }
 
+const formatMessage = (content: string) => {
+  if (!content) return ''
+  // 转义 HTML 并处理换行
+  return escapeHtml(content).replace(/\n/g, '<br>')
+}
+
+// 配置 marked
+if (marked) {
+  marked.setOptions({
+    highlight: function (code: string, lang: string) {
+      if (hljs && lang && hljs.getLanguage(lang)) {
+        try {
+          return hljs.highlight(code, { language: lang }).value
+        } catch (err) {
+          console.error('Highlight error:', err)
+        }
+      }
+      if (hljs) {
+        return hljs.highlightAuto(code).value
+      }
+      return escapeHtml(code)
+    },
+    breaks: true,
+    gfm: true,
+  })
+}
+
 const renderMarkdown = (content: string) => {
   if (!content) return ''
+  if (marked) {
+    try {
+      return marked.parse(content) as string
+    } catch (error) {
+      console.error('Markdown render error:', error)
+    }
+  }
+  // 降级处理：简单的 Markdown 渲染
   let html = content
-
   // 处理多行代码块 ```lang ... ```
   html = html.replace(/```(\w+)?\n([\s\S]*?)```/g, (_, lang, code) => {
     const safeCode = escapeHtml(code.trim())
@@ -172,10 +269,8 @@ const renderMarkdown = (content: string) => {
     const langBadge = langLabel ? `<div class="code-lang">${langLabel}</div>` : ''
     return `<div class="code-block">${langBadge}<pre><code>${safeCode}</code></pre></div>`
   })
-
   // 行内代码 `code`
   html = html.replace(/`([^`]+)`/g, (_, code) => `<code>${escapeHtml(code)}</code>`)
-
   // 普通换行
   html = html.replace(/\n/g, '<br>')
   return html
@@ -242,7 +337,19 @@ const loadAppInfo = async () => {
 
     if (response.data?.code === 0 && response.data?.data) {
       appInfo.value = response.data.data
+      // TODO: 加载用户信息（需要后端支持或单独接口）
       await loadChatHistory()
+      
+      // 如果不是查看模式，且没有历史消息，自动发送初始提示词
+      if (!isViewMode.value && messages.value.length === 0 && appInfo.value.initPrompt) {
+        // 延迟一下，确保界面已渲染
+        nextTick(() => {
+          setTimeout(() => {
+            inputText.value = appInfo.value!.initPrompt || ''
+            handleSendMessage()
+          }, 500)
+        })
+      }
     } else {
       message.error('加载应用信息失败')
       router.push('/')
@@ -252,6 +359,27 @@ const loadAppInfo = async () => {
     router.push('/')
   } finally {
     loadingAppInfo.value = false
+  }
+}
+
+// 编辑应用
+const handleEditApp = (id: number) => {
+  router.push(`/app/edit/${id}`)
+}
+
+// 删除应用
+const handleDeleteApp = async (id: number) => {
+  try {
+    const { deleteMyApp } = await import('@/api/appController')
+    const response = await deleteMyApp({ id: convertIdToString(id) as any })
+    if (response.data?.code === 0) {
+      message.success('删除成功')
+      router.push('/')
+    } else {
+      message.error(response.data?.message || '删除失败')
+    }
+  } catch (error) {
+    message.error('删除失败，请稍后再试')
   }
 }
 
@@ -311,11 +439,20 @@ const handleStreamComplete = (content: string) => {
       console.error('保存消息失败:', error)
     })
 
-    // 显示预览
-    if (appInfo.value?.codeGenType) {
-      showPreview.value = true
-      updatePreviewUrl()
-    }
+    // 显示预览 - 确保在流式完成后触发
+    nextTick(() => {
+      if (appInfo.value?.codeGenType && appInfo.value?.id) {
+        showPreview.value = true
+        updatePreviewUrl()
+        // 强制刷新预览
+        setTimeout(() => {
+          const iframe = document.querySelector('.preview-iframe') as HTMLIFrameElement
+          if (iframe) {
+            iframe.src = iframe.src
+          }
+        }, 1000)
+      }
+    })
   }
 }
 
@@ -457,17 +594,21 @@ onUnmounted(() => {
 .chat-view {
   display: flex;
   flex-direction: column;
-  height: calc(100vh - var(--layout-header-height) - var(--layout-footer-height));
+  height: 100%;
+  min-height: 0;
   background: #ffffff;
+  overflow: hidden;
 }
 
 .chat-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 16px 24px;
-  border-bottom: 1px solid #f0f0f0;
-  background: #ffffff;
+  padding: 16px 20px;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+  background: linear-gradient(180deg, #ffffff 0%, #fafbfc 100%);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+  flex-shrink: 0;
 }
 
 .header-left {
@@ -475,25 +616,51 @@ onUnmounted(() => {
 }
 
 .app-title {
-  font-size: 20px;
+  font-size: 22px;
   font-weight: 600;
-  color: #262626;
+  color: #1a1a1a;
   margin: 0;
+  background: linear-gradient(135deg, #1890ff 0%, #096dd9 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
 }
 
 .chat-content {
   display: flex;
   flex: 1;
+  min-height: 0;
   overflow: hidden;
+  justify-content: center;
+  align-items: stretch;
+}
+
+.chat-content.with-preview {
+  justify-content: flex-start;
 }
 
 .chat-panel {
   display: flex;
   flex-direction: column;
-  flex: 0 0 55%;
+  position: relative;
+  height: 100%;
+  overflow: hidden;
+  background: #ffffff;
+}
+
+.chat-panel.centered {
+  width: 100%;
+  max-width: 800px;
+  min-width: 360px;
+  margin: 0 auto;
+}
+
+.chat-content.with-preview .chat-panel {
+  flex: 0 0 40%;
   max-width: 920px;
   min-width: 360px;
-  border-right: 1px solid #f0f0f0;
+  border-right: 1px solid rgba(0, 0, 0, 0.06);
+  margin: 0;
 }
 
 .preview-panel {
@@ -501,13 +668,37 @@ onUnmounted(() => {
   min-width: 0;
   display: flex;
   flex-direction: column;
-  background: #f5f5f5;
+  background: #f8f9fa;
+  height: 100%;
+  overflow: hidden;
+  flex-shrink: 0;
 }
 
 .messages-container {
   flex: 1;
   overflow-y: auto;
-  padding: 24px;
+  overflow-x: hidden;
+  padding: 16px 20px;
+  padding-bottom: 100px;
+  min-height: 0;
+  scroll-behavior: smooth;
+}
+
+.messages-container::-webkit-scrollbar {
+  width: 6px;
+}
+
+.messages-container::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.messages-container::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 3px;
+}
+
+.messages-container::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 0, 0, 0.3);
 }
 
 .empty-messages {
@@ -515,12 +706,25 @@ onUnmounted(() => {
   align-items: center;
   justify-content: center;
   height: 100%;
+  min-height: 300px;
 }
 
 .message-item {
   display: flex;
   gap: 12px;
-  margin-bottom: 24px;
+  margin-bottom: 20px;
+  animation: fadeIn 0.3s ease-in;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .message-user {
@@ -529,72 +733,205 @@ onUnmounted(() => {
 
 .message-avatar {
   flex-shrink: 0;
+  width: 40px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .message-content {
   flex: 1;
   min-width: 0;
+  display: flex;
+  flex-direction: column;
 }
 
 .message-user .message-content {
-  display: flex;
-  justify-content: flex-end;
+  align-items: flex-end;
+}
+
+.message-ai .message-content {
+  align-items: flex-start;
 }
 
 .message-text {
   display: inline-block;
-  padding: 12px 16px;
-  border-radius: 8px;
-  max-width: 70%;
+  padding: 14px 18px;
+  border-radius: 12px;
+  max-width: 75%;
   word-wrap: break-word;
+  word-break: break-word;
   line-height: 1.6;
+  font-size: 14px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+  transition: all 0.2s ease;
 }
 
 .message-user .message-text {
-  background: #1890ff;
+  background: linear-gradient(135deg, #1890ff 0%, #096dd9 100%);
   color: #ffffff;
+  border-bottom-right-radius: 4px;
+}
+
+.message-user .message-text:hover {
+  box-shadow: 0 4px 12px rgba(24, 144, 255, 0.3);
+  transform: translateY(-1px);
 }
 
 .message-ai .message-text {
-  background: #f5f5f5;
-  color: #262626;
+  background: #f5f7fa;
+  color: #1a1a1a;
+  border-bottom-left-radius: 4px;
+  border: 1px solid rgba(0, 0, 0, 0.06);
+}
+
+.message-ai .message-text:hover {
+  background: #eef2f6;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+}
+
+.markdown-content {
+  line-height: 1.8;
 }
 
 .markdown-content .code-block {
-  margin: 8px 0;
+  margin: 12px 0;
+  border-radius: 8px;
+  overflow: hidden;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
 }
 
-.markdown-content .code-block pre {
-  background: #0f172a;
+.markdown-content :deep(pre) {
+  background: #1e293b;
   color: #e2e8f0;
-  padding: 12px;
+  padding: 16px;
   border-radius: 8px;
-  margin: 0;
+  margin: 12px 0;
   overflow-x: auto;
+  font-size: 13px;
+  line-height: 1.6;
+  font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+}
+
+.markdown-content :deep(pre code) {
+  background: transparent;
+  padding: 0;
+  border: none;
+  color: inherit;
+}
+
+.markdown-content :deep(.hljs) {
+  background: #1e293b;
+  color: #e2e8f0;
 }
 
 .markdown-content .code-lang {
-  font-size: 12px;
-  color: rgba(148, 163, 184, 0.9);
+  font-size: 11px;
+  color: rgba(148, 163, 184, 0.8);
   text-transform: uppercase;
-  margin-bottom: 4px;
+  margin-bottom: 6px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
 }
 
 .markdown-content code {
-  background: rgba(15, 23, 42, 0.08);
-  padding: 2px 4px;
+  background: rgba(15, 23, 42, 0.1);
+  padding: 3px 6px;
   border-radius: 4px;
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+  font-size: 13px;
+  color: #1890ff;
+  border: 1px solid rgba(24, 144, 255, 0.2);
 }
 
 .message-streaming {
-  margin-top: 8px;
+  margin-top: 10px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #8c8c8c;
+  font-size: 12px;
 }
 
 .input-container {
-  padding: 16px 24px;
-  border-top: 1px solid #f0f0f0;
-  background: #ffffff;
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  padding: 12px 20px;
+  border-top: 1px solid rgba(0, 0, 0, 0.06);
+  background: linear-gradient(180deg, #ffffff 0%, #fafbfc 100%);
+  z-index: 10;
+  height: 88px;
+  display: flex;
+  align-items: center;
+  box-sizing: border-box;
+  box-shadow: 0 -4px 12px rgba(0, 0, 0, 0.04);
+}
+
+.input-container :deep(.ant-input-wrapper) {
+  position: relative;
+}
+
+.input-container :deep(.ant-input-wrapper-disabled) {
+  cursor: not-allowed;
+}
+
+.input-container :deep(.ant-input-wrapper-disabled .ant-input) {
+  cursor: not-allowed;
+}
+
+.input-container :deep(.ant-input-wrapper-disabled::after) {
+  content: '无法在别人的作品下对话哦~';
+  position: absolute;
+  top: -30px;
+  left: 0;
+  background: rgba(0, 0, 0, 0.75);
+  color: #fff;
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.2s;
+}
+
+.input-container :deep(.ant-input-wrapper-disabled:hover::after) {
+  opacity: 1;
+}
+
+.input-container :deep(.ant-input) {
+  flex: 1;
+  border-radius: 12px;
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  padding: 12px 16px;
+  font-size: 14px;
+  transition: all 0.2s ease;
+}
+
+.input-container :deep(.ant-input):focus {
+  border-color: #1890ff;
+  box-shadow: 0 0 0 2px rgba(24, 144, 255, 0.1);
+}
+
+.input-container :deep(.ant-input-suffix) {
+  margin-left: 12px;
+}
+
+.input-container :deep(.ant-btn) {
+  border-radius: 8px;
+  height: 40px;
+  padding: 0 20px;
+  font-weight: 500;
+  box-shadow: 0 2px 4px rgba(24, 144, 255, 0.2);
+  transition: all 0.2s ease;
+}
+
+.input-container :deep(.ant-btn):hover {
+  box-shadow: 0 4px 8px rgba(24, 144, 255, 0.3);
+  transform: translateY(-1px);
 }
 
 .preview-header {
@@ -602,26 +939,31 @@ onUnmounted(() => {
   justify-content: space-between;
   align-items: center;
   padding: 16px 24px;
-  border-bottom: 1px solid #f0f0f0;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.06);
   background: #ffffff;
+  flex-shrink: 0;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
 }
 
 .preview-header h3 {
   margin: 0;
   font-size: 16px;
   font-weight: 600;
+  color: #1a1a1a;
 }
 
 .preview-content {
   flex: 1;
   overflow: hidden;
   background: #ffffff;
+  min-height: 0;
 }
 
 .preview-iframe {
   width: 100%;
   height: 100%;
   border: none;
+  display: block;
 }
 
 @media (max-width: 768px) {
@@ -629,14 +971,39 @@ onUnmounted(() => {
     flex-direction: column;
   }
 
-  .preview-panel {
-    width: 100%;
-    height: 50%;
+  .chat-content.with-preview {
+    flex-direction: column;
   }
 
   .chat-panel {
+    width: 100% !important;
+    max-width: 100% !important;
+    height: 60%;
     border-right: none;
-    border-bottom: 1px solid #f0f0f0;
+    border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+    margin: 0 !important;
+  }
+
+  .chat-panel.centered {
+    width: 100% !important;
+    max-width: 100% !important;
+    margin: 0 !important;
+  }
+
+  .preview-panel {
+    width: 100%;
+    height: 40%;
+  }
+
+  .input-container {
+    height: 80px;
+    padding: 12px 16px;
+  }
+
+  .message-text {
+    max-width: 85%;
+    font-size: 13px;
+    padding: 12px 16px;
   }
 }
 </style>
