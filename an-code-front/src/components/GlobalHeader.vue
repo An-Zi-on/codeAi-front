@@ -53,10 +53,10 @@
             </template>
             <template #default>
               <a-avatar size="large" :src="userAvatarSrc" class="user-avatar">
-                <template #icon>
-                  <UserOutlined />
-                </template>
-              </a-avatar>
+              <template #icon>
+                <UserOutlined />
+              </template>
+            </a-avatar>
             </template>
           </a-popover>
         </div>
@@ -112,7 +112,7 @@ onMounted(() => {
   if (!loginUser.value) {
     userStore.updateCurrentUser().catch(() => {
       // 静默处理错误，避免未登录时显示错误提示
-    })
+      })
   }
 })
 

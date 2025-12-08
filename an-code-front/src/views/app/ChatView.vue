@@ -7,7 +7,6 @@
       <div class="header-right">
         <a-space>
           <a-button @click="showAppDetailModal = true">应用详情</a-button>
-          <a-button @click="togglePreview">{{ previewEnabled ? '隐藏预览' : '显示预览' }}</a-button>
           <a-button type="primary" :loading="deploying" :disabled="!canDeploy" @click="handleDeploy">
             部署应用
           </a-button>
@@ -15,51 +14,41 @@
       </div>
     </div>
 
-    <div class="chat-content" :class="{ 'with-preview': shouldShowPreview }">
-      <div class="chat-panel" :class="{ 'centered': !shouldShowPreview }">
-        <div class="messages-container" ref="messagesContainerRef">
+    <div class="chat-content">
+      <!-- 左侧：步骤指南 -->
+      <div class="guide-panel">
+        <div class="guide-container" ref="guideContainerRef">
           <div v-if="historyLoading" class="empty-messages">
             <a-spin size="large" />
           </div>
           <div v-else-if="messages.length === 0" class="empty-messages">
             <a-empty description="开始对话吧" />
           </div>
-          <div
-            v-for="(message, index) in messages"
-            :key="index"
-            :class="['message-item', message.role === 'user' ? 'message-user' : 'message-ai']"
-          >
-            <div class="message-avatar">
-              <a-avatar v-if="message.role === 'user'" :size="32">
-                <template #icon>
-                  <UserOutlined />
-                </template>
-              </a-avatar>
-              <a-avatar v-else :size="40" :src="aiAvatarSrc" @error="handleAvatarError">
-                <template #icon>
-                  <RobotOutlined />
-                </template>
-              </a-avatar>
-            </div>
-            <div class="message-content">
-              <div
-                v-if="message.role === 'user'"
-                class="message-text"
-                v-html="formatMessage(message.content)"
-              ></div>
-              <div
-                v-else
-                class="message-text markdown-content"
-                v-html="renderMarkdown(message.content)"
-              ></div>
-              <div v-if="message.role === 'ai' && message.streaming" class="message-streaming">
-                <a-spin size="small" />
-                <span>AI 正在思考...</span>
+          <div v-else class="guide-content">
+            <div
+              v-for="(message, index) in messages"
+              :key="index"
+              class="message-section"
+            >
+              <!-- 用户消息 -->
+              <div v-if="message.role === 'user'" class="user-message">
+                <div class="user-message-content">{{ message.content }}</div>
+              </div>
+              <!-- AI消息：步骤指南 -->
+              <div v-else class="ai-guide">
+                <div class="guide-title">
+                  <h3>{{ extractTitle(message.content) || '生成指南' }}</h3>
+                  <p class="guide-subtitle">{{ extractSubtitle(message.content) }}</p>
+                </div>
+                <div class="steps-container" v-html="renderGuideSteps(message.content)"></div>
+                <div v-if="message.streaming" class="streaming-indicator">
+                  <a-spin size="small" />
+                  <span>AI 正在生成...</span>
+                </div>
               </div>
             </div>
           </div>
         </div>
-
         <div class="input-container">
           <a-input
             v-model:value="inputText"
@@ -72,7 +61,7 @@
               <a-button
                 type="primary"
                 :loading="streaming"
-                :disabled="!inputText.trim()"
+                :disabled="!inputText.trim() || !canSendMessage"
                 @click="handleSendMessage"
               >
                 发送
@@ -82,18 +71,54 @@
         </div>
       </div>
 
-      <div class="preview-panel" v-if="shouldShowPreview">
-        <div class="preview-header">
-          <h3>网站预览</h3>
-          <a-button type="link" @click="handleRefreshPreview">刷新</a-button>
+      <!-- 右侧：代码编辑器 -->
+      <div class="code-panel">
+        <div class="code-header">
+          <div class="code-tabs">
+            <div
+              v-for="(file, idx) in codeFiles"
+              :key="idx"
+              :class="['code-tab', { active: activeFileIndex === idx }]"
+              @click="activeFileIndex = idx"
+            >
+              <span class="tab-icon">📄</span>
+              <span class="tab-name">{{ file.name }}</span>
+              <span v-if="codeFiles.length > 1" class="tab-close" @click.stop="removeFile(idx)">×</span>
+            </div>
+          </div>
+          <div class="code-actions">
+            <a-button type="link" size="small" @click="handleRefreshPreview">
+              <template #icon><ReloadOutlined /></template>
+              刷新预览
+            </a-button>
+          </div>
         </div>
-        <div class="preview-content">
-          <iframe
-            :src="previewUrl"
-            frameborder="0"
-            class="preview-iframe"
-            @load="handlePreviewLoad"
-          ></iframe>
+        <div class="code-content">
+          <div v-if="codeFiles.length === 0" class="code-empty">
+            <a-empty description="代码生成后将显示在这里" />
+          </div>
+          <div v-else class="code-editor">
+            <div class="code-editor-header">
+              <span class="code-lang">{{ currentFile?.language || 'text' }}</span>
+            </div>
+            <pre class="code-block"><code v-html="highlightCode(currentFile?.content || '', currentFile?.language || '')"></code></pre>
+          </div>
+        </div>
+        <div class="preview-section">
+          <div class="preview-header">
+            <h4>网站预览</h4>
+            <a-button type="link" size="small" @click="togglePreview">
+              {{ previewEnabled ? '隐藏' : '显示' }}
+            </a-button>
+          </div>
+          <div v-if="previewEnabled" class="preview-content">
+            <iframe
+              :src="previewUrl"
+              frameborder="0"
+              class="preview-iframe"
+              @load="handlePreviewLoad"
+            ></iframe>
+          </div>
         </div>
       </div>
     </div>
@@ -113,12 +138,11 @@
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { message } from 'ant-design-vue'
-import { RobotOutlined, UserOutlined } from '@ant-design/icons-vue'
-// 动态导入 marked 和 highlight.js，避免未安装时的错误
+import { ReloadOutlined } from '@ant-design/icons-vue'
+// 动态导入 marked 和 highlight.js
 let marked: any = null
 let hljs: any = null
 
-// 尝试导入 marked 和 highlight.js
 import('marked')
   .then((module) => {
     marked = module.marked
@@ -133,6 +157,7 @@ import('marked')
   .catch((error) => {
     console.warn('Markdown libraries not installed, using fallback renderer:', error)
   })
+
 import { getMyApp } from '@/api/appController'
 import { deployApp } from '@/api/deployController'
 import { getLastLocalDateTime, pageByApp, saveMessage } from '@/api/chatHistoryController'
@@ -154,10 +179,8 @@ const appId = computed(() => {
   return 0
 })
 
-// 检查是否是查看模式（不自动发送消息）
 const isViewMode = computed(() => route.query.view === '1')
 
-// 检查是否可以发送消息（只有自己的应用或管理员可以）
 const canSendMessage = computed(() => {
   if (!appInfo.value || !userStore.loginUser) return false
   return (
@@ -166,23 +189,13 @@ const canSendMessage = computed(() => {
   )
 })
 
-// AI 头像
-const aiAvatarSrc = ref<string | undefined>('/src/assets/aiAvatar.png')
-
-const handleAvatarError = () => {
-  aiAvatarSrc.value = undefined
-}
-
-// 应用详情弹窗
 const showAppDetailModal = ref(false)
 const userName = ref('')
 const userAvatar = ref('')
 
-// 应用信息
 const appInfo = ref<AppVO | null>(null)
 const loadingAppInfo = ref(false)
 
-// 消息列表
 interface ChatMessage {
   role: 'user' | 'ai'
   content: string
@@ -192,7 +205,19 @@ interface ChatMessage {
 const messages = ref<ChatMessage[]>([])
 const inputText = ref('')
 const streaming = ref(false)
-const messagesContainerRef = ref<HTMLElement>()
+const guideContainerRef = ref<HTMLElement>()
+
+// 代码文件
+interface CodeFile {
+  name: string
+  content: string
+  language: string
+}
+
+const codeFiles = ref<CodeFile[]>([])
+const activeFileIndex = ref(0)
+
+const currentFile = computed(() => codeFiles.value[activeFileIndex.value] || null)
 
 // 预览
 const showPreview = ref(false)
@@ -200,19 +225,170 @@ const previewUrl = ref('')
 const previewLoaded = ref(false)
 const previewEnabled = ref(true)
 
-// 部署
 const deploying = ref(false)
-
-// SSE 连接
 let sseConnection: EventSource | null = null
-
-// 加载历史
 const historyLoading = ref(false)
 
-const shouldShowPreview = computed(() => showPreview.value && previewEnabled.value)
+const canDeploy = computed(() => {
+  return appInfo.value?.codeGenType && appInfo.value?.id && previewLoaded.value
+})
 
-const togglePreview = () => {
-  previewEnabled.value = !previewEnabled.value
+// 提取标题
+const extractTitle = (content: string): string => {
+  const titleMatch = content.match(/^#\s+(.+)/m)
+  if (titleMatch) return titleMatch[1]
+  const stepMatch = content.match(/STEP\s+\d+[：:]\s*(.+)/i)
+  if (stepMatch) return stepMatch[1]
+  return ''
+}
+
+// 提取副标题
+const extractSubtitle = (content: string): string => {
+  const subtitleMatch = content.match(/参考(.+?)生成/i) || content.match(/生成(.+?)应用/i)
+  if (subtitleMatch) return subtitleMatch[0]
+  return ''
+}
+
+// 渲染步骤指南
+const renderGuideSteps = (content: string): string => {
+  if (!content) return ''
+  
+  // 提取所有步骤
+  const stepRegex = /STEP\s+(\d+)[：:]\s*(.+?)(?=STEP\s+\d+[：:]|```|$)/gis
+  const steps: string[] = []
+  let match
+  
+  while ((match = stepRegex.exec(content)) !== null) {
+    const stepNum = match[1]
+    const stepContent = match[2].trim()
+    
+    // 提取步骤描述和文件引用
+    const fileMatch = stepContent.match(/`([^`]+\.(jsx?|tsx?|vue|css|html))`/i)
+    const fileRef = fileMatch ? fileMatch[1] : ''
+    const description = stepContent.replace(/`[^`]+`/g, '').trim()
+    
+    steps.push(`
+      <div class="step-item">
+        <div class="step-header">
+          <span class="step-number">STEP ${stepNum}</span>
+          <span class="step-title">${description.split('\n')[0] || '步骤'}</span>
+        </div>
+        <div class="step-content">
+          ${description.split('\n').slice(1).join('<br>') || description}
+          ${fileRef ? `<div class="step-file"><span class="file-icon">📄</span> ${fileRef}</div>` : ''}
+        </div>
+      </div>
+    `)
+  }
+  
+  // 如果没有找到STEP格式，尝试其他格式
+  if (steps.length === 0) {
+    // 尝试提取代码块前的描述
+    const parts = content.split(/```/).filter((p, i) => i % 2 === 0)
+    parts.forEach((part, idx) => {
+      if (part.trim()) {
+        steps.push(`
+          <div class="step-item">
+            <div class="step-header">
+              <span class="step-number">STEP ${idx + 1}</span>
+            </div>
+            <div class="step-content">${part.trim().replace(/\n/g, '<br>')}</div>
+          </div>
+        `)
+      }
+    })
+  }
+  
+  return steps.join('')
+}
+
+// 解析代码文件
+const parseCodeFiles = (content: string) => {
+  const files: CodeFile[] = []
+  
+  // 匹配代码块：```lang filename\ncode```
+  const codeBlockRegex = /```(\w+)?\s*([^\n]+)?\n([\s\S]*?)```/g
+  let match
+  
+  while ((match = codeBlockRegex.exec(content)) !== null) {
+    const language = match[1] || 'text'
+    const fileName = match[2]?.trim() || `file.${getDefaultExtension(language)}`
+    const code = match[3].trim()
+    
+    files.push({
+      name: fileName,
+      content: code,
+      language: language,
+    })
+  }
+  
+  // 如果没有找到代码块，尝试从STEP中提取文件名
+  if (files.length === 0) {
+    const fileRefRegex = /`([^\s`]+\.(jsx?|tsx?|vue|css|html))`/gi
+    const fileNames = new Set<string>()
+    let fileMatch
+    
+    while ((fileMatch = fileRefRegex.exec(content)) !== null) {
+      fileNames.add(fileMatch[1])
+    }
+    
+    fileNames.forEach((name) => {
+      files.push({
+        name,
+        content: '// 代码生成中...',
+        language: getLanguageFromFileName(name),
+      })
+    })
+  }
+  
+  return files
+}
+
+const getDefaultExtension = (lang: string): string => {
+  const map: Record<string, string> = {
+    javascript: 'js',
+    typescript: 'ts',
+    jsx: 'jsx',
+    tsx: 'tsx',
+    vue: 'vue',
+    css: 'css',
+    html: 'html',
+  }
+  return map[lang.toLowerCase()] || 'txt'
+}
+
+const getLanguageFromFileName = (fileName: string): string => {
+  const ext = fileName.split('.').pop()?.toLowerCase()
+  const map: Record<string, string> = {
+    js: 'javascript',
+    jsx: 'jsx',
+    ts: 'typescript',
+    tsx: 'tsx',
+    vue: 'vue',
+    css: 'css',
+    html: 'html',
+  }
+  return map[ext || ''] || 'text'
+}
+
+// 代码高亮
+const highlightCode = (code: string, language: string): string => {
+  if (!code) return ''
+  if (hljs && language) {
+    try {
+      return hljs.highlight(code, { language }).value
+    } catch (err) {
+      console.error('Highlight error:', err)
+    }
+  }
+  if (hljs) {
+    try {
+      return hljs.highlightAuto(code).value
+    } catch (err) {
+      console.error('Highlight error:', err)
+    }
+  }
+  return escapeHtml(code)
 }
 
 const escapeHtml = (unsafe: string) => {
@@ -224,62 +400,18 @@ const escapeHtml = (unsafe: string) => {
     .replace(/'/g, '&#039;')
 }
 
-const formatMessage = (content: string) => {
-  if (!content) return ''
-  // 转义 HTML 并处理换行
-  return escapeHtml(content).replace(/\n/g, '<br>')
-}
-
-// 配置 marked
-if (marked) {
-  marked.setOptions({
-    highlight: function (code: string, lang: string) {
-      if (hljs && lang && hljs.getLanguage(lang)) {
-        try {
-          return hljs.highlight(code, { language: lang }).value
-        } catch (err) {
-          console.error('Highlight error:', err)
-        }
-      }
-      if (hljs) {
-        return hljs.highlightAuto(code).value
-      }
-      return escapeHtml(code)
-    },
-    breaks: true,
-    gfm: true,
-  })
-}
-
-const renderMarkdown = (content: string) => {
-  if (!content) return ''
-  if (marked) {
-    try {
-      return marked.parse(content) as string
-    } catch (error) {
-      console.error('Markdown render error:', error)
+const removeFile = (index: number) => {
+  if (codeFiles.value.length > 1) {
+    codeFiles.value.splice(index, 1)
+    if (activeFileIndex.value >= codeFiles.value.length) {
+      activeFileIndex.value = codeFiles.value.length - 1
     }
   }
-  // 降级处理：简单的 Markdown 渲染
-  let html = content
-  // 处理多行代码块 ```lang ... ```
-  html = html.replace(/```(\w+)?\n([\s\S]*?)```/g, (_, lang, code) => {
-    const safeCode = escapeHtml(code.trim())
-    const langLabel = lang ? lang.toLowerCase() : ''
-    const langBadge = langLabel ? `<div class="code-lang">${langLabel}</div>` : ''
-    return `<div class="code-block">${langBadge}<pre><code>${safeCode}</code></pre></div>`
-  })
-  // 行内代码 `code`
-  html = html.replace(/`([^`]+)`/g, (_, code) => `<code>${escapeHtml(code)}</code>`)
-  // 普通换行
-  html = html.replace(/\n/g, '<br>')
-  return html
 }
 
-// 是否可以部署
-const canDeploy = computed(() => {
-  return appInfo.value?.codeGenType && appInfo.value?.id && previewLoaded.value
-})
+const togglePreview = () => {
+  previewEnabled.value = !previewEnabled.value
+}
 
 const loadChatHistory = async () => {
   const numericAppId = appId.value
@@ -288,7 +420,6 @@ const loadChatHistory = async () => {
   }
   try {
     historyLoading.value = true
-    // 先获取最新一条消息时间
     const lastTimeResp = await getLastLocalDateTime({
       id: numericAppId,
     })
@@ -314,6 +445,12 @@ const loadChatHistory = async () => {
         content: item.message || '',
         streaming: false,
       }))
+      
+      // 解析最后一个AI消息的代码文件
+      const lastAiMessage = messages.value.filter(m => m.role === 'ai').pop()
+      if (lastAiMessage) {
+        codeFiles.value = parseCodeFiles(lastAiMessage.content)
+      }
     }
   } catch (error) {
     message.error('加载历史对话失败')
@@ -322,7 +459,6 @@ const loadChatHistory = async () => {
   }
 }
 
-// 加载应用信息
 const loadAppInfo = async () => {
   const numericAppId = Number(appId.value)
   if (!numericAppId || Number.isNaN(numericAppId)) {
@@ -337,12 +473,9 @@ const loadAppInfo = async () => {
 
     if (response.data?.code === 0 && response.data?.data) {
       appInfo.value = response.data.data
-      // TODO: 加载用户信息（需要后端支持或单独接口）
       await loadChatHistory()
       
-      // 如果不是查看模式，且没有历史消息，自动发送初始提示词
       if (!isViewMode.value && messages.value.length === 0 && appInfo.value.initPrompt) {
-        // 延迟一下，确保界面已渲染
         nextTick(() => {
           setTimeout(() => {
             inputText.value = appInfo.value!.initPrompt || ''
@@ -362,12 +495,10 @@ const loadAppInfo = async () => {
   }
 }
 
-// 编辑应用
 const handleEditApp = (id: number) => {
   router.push(`/app/edit/${id}`)
 }
 
-// 删除应用
 const handleDeleteApp = async (id: number) => {
   try {
     const { deleteMyApp } = await import('@/api/appController')
@@ -383,20 +514,17 @@ const handleDeleteApp = async (id: number) => {
   }
 }
 
-// 发送消息
 const handleSendMessage = async () => {
   if (!inputText.value.trim() || streaming.value) return
 
   const userMessage = inputText.value.trim()
   inputText.value = ''
 
-  // 添加用户消息
   messages.value.push({
     role: 'user',
     content: userMessage,
   })
 
-  // 保存用户消息
   try {
     await saveMessage({
       appId: convertIdToString(appId.value) as any,
@@ -407,7 +535,6 @@ const handleSendMessage = async () => {
     console.error('保存消息失败:', error)
   }
 
-  // 添加 AI 消息占位
   const aiMessageIndex = messages.value.length
   messages.value.push({
     role: 'ai',
@@ -416,12 +543,9 @@ const handleSendMessage = async () => {
   })
 
   scrollToBottom()
-
-  // 调用生成代码接口
   await generateCodeStream(userMessage)
 }
 
-// 处理流式完成
 const handleStreamComplete = (content: string) => {
   const aiMessageIndex = messages.value.length - 1
   if (aiMessageIndex >= 0) {
@@ -429,7 +553,6 @@ const handleStreamComplete = (content: string) => {
   }
   streaming.value = false
 
-  // 保存 AI 消息
   if (content) {
     saveMessage({
       appId: convertIdToString(appId.value) as any,
@@ -439,12 +562,16 @@ const handleStreamComplete = (content: string) => {
       console.error('保存消息失败:', error)
     })
 
-    // 显示预览 - 确保在流式完成后触发
+    // 解析代码文件
+    codeFiles.value = parseCodeFiles(content)
+    if (codeFiles.value.length > 0) {
+      activeFileIndex.value = 0
+    }
+
     nextTick(() => {
       if (appInfo.value?.codeGenType && appInfo.value?.id) {
         showPreview.value = true
         updatePreviewUrl()
-        // 强制刷新预览
         setTimeout(() => {
           const iframe = document.querySelector('.preview-iframe') as HTMLIFrameElement
           if (iframe) {
@@ -456,18 +583,14 @@ const handleStreamComplete = (content: string) => {
   }
 }
 
-// 生成代码流
 const generateCodeStream = async (userMessage: string) => {
   try {
     streaming.value = true
 
-    // 获取当前 AI 消息索引
     const aiMessageIndex = messages.value.length - 1
     let accumulatedContent = ''
 
-    // 构建 SSE URL（SSE 需要完整 URL）
     const url = `http://localhost:8102/api/app/chat/gen/code`
-    // 创建 SSE 连接
     sseConnection = createSSEConnection(
       url,
       {
@@ -477,21 +600,24 @@ const generateCodeStream = async (userMessage: string) => {
       {
         onMessage: (msg: SSEMessage) => {
           try {
-            // 后端返回的是 JSON 格式：{"d": "chunk内容"}
             const jsonData = JSON.parse(msg.data)
             const chunk = jsonData.d || ''
             if (chunk) {
               accumulatedContent += chunk
               messages.value[aiMessageIndex].content = accumulatedContent
               messages.value[aiMessageIndex].streaming = true
+              
+              // 实时解析代码文件
+              codeFiles.value = parseCodeFiles(accumulatedContent)
+              
               scrollToBottom()
             }
           } catch (error) {
-            // 如果不是 JSON，直接使用原始数据
             if (msg.data) {
               accumulatedContent += msg.data
               messages.value[aiMessageIndex].content = accumulatedContent
               messages.value[aiMessageIndex].streaming = true
+              codeFiles.value = parseCodeFiles(accumulatedContent)
               scrollToBottom()
             }
           }
@@ -504,7 +630,6 @@ const generateCodeStream = async (userMessage: string) => {
             message.error('生成代码失败，请重试')
             messages.value.splice(aiMessageIndex, 1)
           } else {
-            // 即使出错，如果有内容也保存
             handleStreamComplete(accumulatedContent)
           }
         },
@@ -519,25 +644,21 @@ const generateCodeStream = async (userMessage: string) => {
   }
 }
 
-// 更新预览 URL
 const updatePreviewUrl = () => {
   if (appInfo.value?.codeGenType && appInfo.value?.id) {
     previewUrl.value = `http://localhost:8102/api/static/${appInfo.value.codeGenType}_${appInfo.value.id}/`
   }
 }
 
-// 预览加载完成
 const handlePreviewLoad = () => {
   previewLoaded.value = true
 }
 
-// 刷新预览
 const handleRefreshPreview = () => {
   previewLoaded.value = false
   updatePreviewUrl()
 }
 
-// 部署应用
 const handleDeploy = async () => {
   if (!appInfo.value?.id || appInfo.value.id === '0') {
     message.error('应用ID无效')
@@ -552,7 +673,6 @@ const handleDeploy = async () => {
 
     if (response.data?.code === 0 && response.data?.data) {
       message.success('部署成功！')
-      // 在新窗口打开部署的 URL
       window.open(response.data.data, '_blank')
     } else {
       message.error(response.data?.message || '部署失败')
@@ -564,16 +684,14 @@ const handleDeploy = async () => {
   }
 }
 
-// 滚动到底部
 const scrollToBottom = () => {
   nextTick(() => {
-    if (messagesContainerRef.value) {
-      messagesContainerRef.value.scrollTop = messagesContainerRef.value.scrollHeight
+    if (guideContainerRef.value) {
+      guideContainerRef.value.scrollTop = guideContainerRef.value.scrollHeight
     }
   })
 }
 
-// 监听消息变化，自动滚动
 watch(
   () => messages.value.length,
   () => {
@@ -596,7 +714,7 @@ onUnmounted(() => {
   flex-direction: column;
   height: 100%;
   min-height: 0;
-  background: #ffffff;
+  background: #f5f7fa;
   overflow: hidden;
 }
 
@@ -604,26 +722,19 @@ onUnmounted(() => {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 16px 20px;
+  padding: 16px 24px;
   border-bottom: 1px solid rgba(0, 0, 0, 0.06);
-  background: linear-gradient(180deg, #ffffff 0%, #fafbfc 100%);
+  background: #ffffff;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
   flex-shrink: 0;
-}
-
-.header-left {
-  flex: 1;
+  z-index: 10;
 }
 
 .app-title {
-  font-size: 22px;
+  font-size: 20px;
   font-weight: 600;
   color: #1a1a1a;
   margin: 0;
-  background: linear-gradient(135deg, #1890ff 0%, #096dd9 100%);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
 }
 
 .chat-content {
@@ -631,74 +742,325 @@ onUnmounted(() => {
   flex: 1;
   min-height: 0;
   overflow: hidden;
-  justify-content: center;
-  align-items: stretch;
 }
 
-.chat-content.with-preview {
-  justify-content: flex-start;
-}
-
-.chat-panel {
+/* 左侧：步骤指南 */
+.guide-panel {
+  flex: 0 0 45%;
+  min-width: 0;
   display: flex;
   flex-direction: column;
-  position: relative;
-  height: 100%;
-  overflow: hidden;
   background: #ffffff;
+  border-right: 1px solid rgba(0, 0, 0, 0.06);
+  overflow: hidden;
 }
 
-.chat-panel.centered {
-  width: 100%;
+.guide-container {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 24px;
+  min-height: 0;
+}
+
+.guide-content {
   max-width: 800px;
-  min-width: 360px;
   margin: 0 auto;
 }
 
-.chat-content.with-preview .chat-panel {
-  flex: 0 0 40%;
-  max-width: 920px;
-  min-width: 360px;
-  border-right: 1px solid rgba(0, 0, 0, 0.06);
-  margin: 0;
+.message-section {
+  margin-bottom: 32px;
 }
 
-.preview-panel {
+.user-message {
+  margin-bottom: 24px;
+}
+
+.user-message-content {
+  display: inline-block;
+  padding: 12px 18px;
+  background: linear-gradient(135deg, #1890ff 0%, #096dd9 100%);
+  color: #ffffff;
+  border-radius: 12px;
+  border-bottom-right-radius: 4px;
+  max-width: 80%;
+  margin-left: auto;
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.ai-guide {
+  background: #fafbfc;
+  border-radius: 16px;
+  padding: 24px;
+  border: 1px solid rgba(0, 0, 0, 0.06);
+}
+
+.guide-title h3 {
+  font-size: 20px;
+  font-weight: 600;
+  color: #1a1a1a;
+  margin: 0 0 8px;
+}
+
+.guide-subtitle {
+  font-size: 14px;
+  color: rgba(0, 0, 0, 0.65);
+  margin: 0 0 24px;
+}
+
+.steps-container {
+  margin-top: 16px;
+}
+
+.step-item {
+  margin-bottom: 20px;
+  padding: 16px;
+  background: #ffffff;
+  border-radius: 12px;
+  border-left: 3px solid #1890ff;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+}
+
+.step-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.step-number {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  background: linear-gradient(135deg, #1890ff 0%, #096dd9 100%);
+  color: #ffffff;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.step-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: #1a1a1a;
+}
+
+.step-content {
+  font-size: 14px;
+  color: rgba(0, 0, 0, 0.75);
+  line-height: 1.8;
+  margin-left: 44px;
+}
+
+.step-file {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  padding: 6px 12px;
+  background: rgba(24, 144, 255, 0.1);
+  border-radius: 6px;
+  font-size: 13px;
+  color: #1890ff;
+}
+
+.file-icon {
+  font-size: 14px;
+}
+
+.streaming-indicator {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 16px;
+  color: rgba(0, 0, 0, 0.45);
+  font-size: 13px;
+}
+
+.input-container {
+  flex-shrink: 0;
+  padding: 16px 24px;
+  border-top: 1px solid rgba(0, 0, 0, 0.06);
+  background: #ffffff;
+}
+
+/* 右侧：代码编辑器 */
+.code-panel {
   flex: 1;
   min-width: 0;
   display: flex;
   flex-direction: column;
-  background: #f8f9fa;
-  height: 100%;
+  background: #1e293b;
   overflow: hidden;
+}
+
+.code-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0 16px;
+  background: #0f172a;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
   flex-shrink: 0;
 }
 
-.messages-container {
+.code-tabs {
+  display: flex;
+  gap: 4px;
+  overflow-x: auto;
   flex: 1;
-  overflow-y: auto;
-  overflow-x: hidden;
-  padding: 16px 20px;
-  padding-bottom: 100px;
-  min-height: 0;
-  scroll-behavior: smooth;
 }
 
-.messages-container::-webkit-scrollbar {
-  width: 6px;
+.code-tab {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  background: rgba(255, 255, 255, 0.05);
+  color: rgba(255, 255, 255, 0.7);
+  border-radius: 8px 8px 0 0;
+  cursor: pointer;
+  transition: all 0.2s;
+  white-space: nowrap;
+  border-bottom: 2px solid transparent;
 }
 
-.messages-container::-webkit-scrollbar-track {
+.code-tab:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: rgba(255, 255, 255, 0.9);
+}
+
+.code-tab.active {
+  background: #1e293b;
+  color: #ffffff;
+  border-bottom-color: #1890ff;
+}
+
+.tab-icon {
+  font-size: 14px;
+}
+
+.tab-name {
+  font-size: 13px;
+}
+
+.tab-close {
+  margin-left: 4px;
+  width: 18px;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  font-size: 16px;
+  line-height: 1;
+  transition: background 0.2s;
+}
+
+.tab-close:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+.code-actions {
+  padding: 8px 0;
+}
+
+.code-content {
+  flex: 1;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  background: #1e293b;
+}
+
+.code-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: rgba(255, 255, 255, 0.5);
+}
+
+.code-editor {
+  flex: 1;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.code-editor-header {
+  padding: 8px 16px;
+  background: #0f172a;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.code-lang {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.6);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.code-block {
+  flex: 1;
+  overflow: auto;
+  margin: 0;
+  padding: 20px;
+  background: #1e293b;
+  color: #e2e8f0;
+  font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.code-block code {
   background: transparent;
+  padding: 0;
+  border: none;
+  color: inherit;
 }
 
-.messages-container::-webkit-scrollbar-thumb {
-  background: rgba(0, 0, 0, 0.2);
-  border-radius: 3px;
+/* 预览区域 */
+.preview-section {
+  flex: 0 0 40%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: #ffffff;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
 }
 
-.messages-container::-webkit-scrollbar-thumb:hover {
-  background: rgba(0, 0, 0, 0.3);
+.preview-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 16px;
+  background: #f8f9fa;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+}
+
+.preview-header h4 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: #1a1a1a;
+}
+
+.preview-content {
+  flex: 1;
+  overflow: hidden;
+  background: #ffffff;
+}
+
+.preview-iframe {
+  width: 100%;
+  height: 100%;
+  border: none;
+  display: block;
 }
 
 .empty-messages {
@@ -709,301 +1071,37 @@ onUnmounted(() => {
   min-height: 300px;
 }
 
-.message-item {
-  display: flex;
-  gap: 12px;
-  margin-bottom: 20px;
-  animation: fadeIn 0.3s ease-in;
-}
-
-@keyframes fadeIn {
-  from {
-    opacity: 0;
-    transform: translateY(10px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-.message-user {
-  flex-direction: row-reverse;
-}
-
-.message-avatar {
-  flex-shrink: 0;
-  width: 40px;
-  height: 40px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.message-content {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-}
-
-.message-user .message-content {
-  align-items: flex-end;
-}
-
-.message-ai .message-content {
-  align-items: flex-start;
-}
-
-.message-text {
-  display: inline-block;
-  padding: 14px 18px;
-  border-radius: 12px;
-  max-width: 75%;
-  word-wrap: break-word;
-  word-break: break-word;
-  line-height: 1.6;
-  font-size: 14px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
-  transition: all 0.2s ease;
-}
-
-.message-user .message-text {
-  background: linear-gradient(135deg, #1890ff 0%, #096dd9 100%);
-  color: #ffffff;
-  border-bottom-right-radius: 4px;
-}
-
-.message-user .message-text:hover {
-  box-shadow: 0 4px 12px rgba(24, 144, 255, 0.3);
-  transform: translateY(-1px);
-}
-
-.message-ai .message-text {
-  background: #f5f7fa;
-  color: #1a1a1a;
-  border-bottom-left-radius: 4px;
-  border: 1px solid rgba(0, 0, 0, 0.06);
-}
-
-.message-ai .message-text:hover {
-  background: #eef2f6;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
-}
-
-.markdown-content {
-  line-height: 1.8;
-}
-
-.markdown-content .code-block {
-  margin: 12px 0;
-  border-radius: 8px;
-  overflow: hidden;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
-}
-
-.markdown-content :deep(pre) {
-  background: #1e293b;
-  color: #e2e8f0;
-  padding: 16px;
-  border-radius: 8px;
-  margin: 12px 0;
-  overflow-x: auto;
-  font-size: 13px;
-  line-height: 1.6;
-  font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
-}
-
-.markdown-content :deep(pre code) {
-  background: transparent;
-  padding: 0;
-  border: none;
-  color: inherit;
-}
-
-.markdown-content :deep(.hljs) {
-  background: #1e293b;
-  color: #e2e8f0;
-}
-
-.markdown-content .code-lang {
-  font-size: 11px;
-  color: rgba(148, 163, 184, 0.8);
-  text-transform: uppercase;
-  margin-bottom: 6px;
-  font-weight: 600;
-  letter-spacing: 0.5px;
-}
-
-.markdown-content code {
-  background: rgba(15, 23, 42, 0.1);
-  padding: 3px 6px;
-  border-radius: 4px;
-  font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
-  font-size: 13px;
-  color: #1890ff;
-  border: 1px solid rgba(24, 144, 255, 0.2);
-}
-
-.message-streaming {
-  margin-top: 10px;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  color: #8c8c8c;
-  font-size: 12px;
-}
-
-.input-container {
-  position: absolute;
-  bottom: 0;
-  left: 0;
-  right: 0;
-  padding: 12px 20px;
-  border-top: 1px solid rgba(0, 0, 0, 0.06);
-  background: linear-gradient(180deg, #ffffff 0%, #fafbfc 100%);
-  z-index: 10;
-  height: 88px;
-  display: flex;
-  align-items: center;
-  box-sizing: border-box;
-  box-shadow: 0 -4px 12px rgba(0, 0, 0, 0.04);
-}
-
-.input-container :deep(.ant-input-wrapper) {
-  position: relative;
-}
-
-.input-container :deep(.ant-input-wrapper-disabled) {
-  cursor: not-allowed;
-}
-
-.input-container :deep(.ant-input-wrapper-disabled .ant-input) {
-  cursor: not-allowed;
-}
-
-.input-container :deep(.ant-input-wrapper-disabled::after) {
-  content: '无法在别人的作品下对话哦~';
-  position: absolute;
-  top: -30px;
-  left: 0;
-  background: rgba(0, 0, 0, 0.75);
-  color: #fff;
-  padding: 4px 8px;
-  border-radius: 4px;
-  font-size: 12px;
-  white-space: nowrap;
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 0.2s;
-}
-
-.input-container :deep(.ant-input-wrapper-disabled:hover::after) {
-  opacity: 1;
-}
-
-.input-container :deep(.ant-input) {
-  flex: 1;
-  border-radius: 12px;
-  border: 1px solid rgba(0, 0, 0, 0.1);
-  padding: 12px 16px;
-  font-size: 14px;
-  transition: all 0.2s ease;
-}
-
-.input-container :deep(.ant-input):focus {
-  border-color: #1890ff;
-  box-shadow: 0 0 0 2px rgba(24, 144, 255, 0.1);
-}
-
-.input-container :deep(.ant-input-suffix) {
-  margin-left: 12px;
-}
-
-.input-container :deep(.ant-btn) {
-  border-radius: 8px;
-  height: 40px;
-  padding: 0 20px;
-  font-weight: 500;
-  box-shadow: 0 2px 4px rgba(24, 144, 255, 0.2);
-  transition: all 0.2s ease;
-}
-
-.input-container :deep(.ant-btn):hover {
-  box-shadow: 0 4px 8px rgba(24, 144, 255, 0.3);
-  transform: translateY(-1px);
-}
-
-.preview-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 16px 24px;
-  border-bottom: 1px solid rgba(0, 0, 0, 0.06);
-  background: #ffffff;
-  flex-shrink: 0;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
-}
-
-.preview-header h3 {
-  margin: 0;
-  font-size: 16px;
-  font-weight: 600;
-  color: #1a1a1a;
-}
-
-.preview-content {
-  flex: 1;
-  overflow: hidden;
-  background: #ffffff;
-  min-height: 0;
-}
-
-.preview-iframe {
-  width: 100%;
-  height: 100%;
-  border: none;
-  display: block;
-}
-
-@media (max-width: 768px) {
+@media (max-width: 1024px) {
   .chat-content {
     flex-direction: column;
   }
 
-  .chat-content.with-preview {
-    flex-direction: column;
-  }
-
-  .chat-panel {
-    width: 100% !important;
-    max-width: 100% !important;
-    height: 60%;
+  .guide-panel {
+    flex: 0 0 50%;
     border-right: none;
     border-bottom: 1px solid rgba(0, 0, 0, 0.06);
-    margin: 0 !important;
   }
 
-  .chat-panel.centered {
-    width: 100% !important;
-    max-width: 100% !important;
-    margin: 0 !important;
+  .code-panel {
+    flex: 0 0 50%;
   }
 
-  .preview-panel {
-    width: 100%;
-    height: 40%;
+  .preview-section {
+    flex: 0 0 30%;
+  }
+}
+
+@media (max-width: 768px) {
+  .guide-panel {
+    flex: 0 0 60%;
   }
 
-  .input-container {
-    height: 80px;
-    padding: 12px 16px;
+  .code-panel {
+    flex: 0 0 40%;
   }
 
-  .message-text {
-    max-width: 85%;
-    font-size: 13px;
-    padding: 12px 16px;
+  .preview-section {
+    display: none;
   }
 }
 </style>

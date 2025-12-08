@@ -2,17 +2,6 @@
   <div class="home-view">
     <div class="gradient-bg"></div>
     <div class="home-container">
-      <header class="home-nav">
-        <div class="nav-left">
-          <div class="nav-logo">An-Code</div>
-        </div>
-        <div class="nav-links">
-          <a href="javascript:void(0)">使用文档</a>
-          <a href="javascript:void(0)">交流社区</a>
-          <a href="javascript:void(0)">产品更新</a>
-        </div>
-      </header>
-
       <section class="hero-section">
         <div class="hero-text">
           <p class="hero-eyebrow">AI·NoCode·极速创造</p>
@@ -411,42 +400,6 @@ onUnmounted(() => {
   color: #0f172a;
 }
 
-.home-nav {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 16px 24px;
-  border-radius: 16px;
-  background: rgba(255, 255, 255, 0.85);
-  backdrop-filter: blur(12px);
-  border: 1px solid rgba(255, 255, 255, 0.4);
-  margin-bottom: 32px;
-}
-
-.nav-logo {
-  font-size: 20px;
-  font-weight: 700;
-  color: #0f1d7a;
-  letter-spacing: 0.06em;
-}
-
-.nav-links {
-  display: flex;
-  gap: 24px;
-}
-
-.nav-links a {
-  color: #0f172a;
-  text-decoration: none;
-  font-size: 14px;
-  opacity: 0.7;
-  transition: opacity 0.2s;
-}
-
-.nav-links a:hover {
-  opacity: 1;
-}
-
 .hero-section {
   text-align: center;
   padding: 40px 0 48px;
@@ -809,16 +762,6 @@ onUnmounted(() => {
 @media (max-width: 768px) {
   .home-container {
     padding: 32px 16px 60px;
-  }
-
-  .home-nav {
-    flex-direction: column;
-    gap: 16px;
-  }
-
-  .nav-links {
-    flex-wrap: wrap;
-    justify-content: center;
   }
 
   .input-actions {
