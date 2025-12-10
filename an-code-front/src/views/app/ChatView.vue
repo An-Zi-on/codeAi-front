@@ -36,15 +36,27 @@
               </div>
               <!-- AI消息：步骤指南 -->
               <div v-else class="ai-guide">
-                <div class="guide-title">
-                  <h3>{{ extractTitle(message.content) || '生成指南' }}</h3>
-                  <p class="guide-subtitle">{{ extractSubtitle(message.content) }}</p>
-                </div>
-                <div class="steps-container" v-html="renderGuideSteps(message.content)"></div>
-                <div v-if="message.streaming" class="streaming-indicator">
-                  <a-spin size="small" />
-                  <span>AI 正在生成...</span>
-                </div>
+                <template v-if="message.error">
+                  <div class="error-box">
+                    <p class="error-text">{{ message.content || '服务器繁忙，请稍后重试' }}</p>
+                    <div class="error-actions">
+                      <a-button size="small" type="primary" @click="handleRetry(message.retryPrompt)">
+                        重新发送
+                      </a-button>
+                    </div>
+                  </div>
+                </template>
+                <template v-else>
+                  <div class="guide-title">
+                    <h3>{{ extractTitle(message.content) || '生成指南' }}</h3>
+                    <p class="guide-subtitle">{{ extractSubtitle(message.content) }}</p>
+                  </div>
+                  <div class="steps-container" v-html="renderGuideSteps(message.content)"></div>
+                  <div v-if="message.streaming" class="streaming-indicator">
+                    <a-spin size="small" />
+                    <span>AI 正在生成...</span>
+                  </div>
+                </template>
               </div>
             </div>
           </div>
@@ -200,12 +212,16 @@ interface ChatMessage {
   role: 'user' | 'ai'
   content: string
   streaming?: boolean
+  error?: boolean
+  retryPrompt?: string
 }
 
 const messages = ref<ChatMessage[]>([])
 const inputText = ref('')
 const streaming = ref(false)
 const guideContainerRef = ref<HTMLElement>()
+const autoGenTriggered = ref(false)
+const lastUserPrompt = ref('')
 
 // 代码文件
 interface CodeFile {
@@ -475,11 +491,42 @@ const loadAppInfo = async () => {
       appInfo.value = response.data.data
       await loadChatHistory()
       
+      // 如果不是查看模式，且有初始提示词，且没有历史消息，自动调用生成代码接口
       if (!isViewMode.value && messages.value.length === 0 && appInfo.value.initPrompt) {
-        nextTick(() => {
-          setTimeout(() => {
-            inputText.value = appInfo.value!.initPrompt || ''
-            handleSendMessage()
+        nextTick(async () => {
+          setTimeout(async () => {
+            // 直接调用生成代码接口，不通过输入框
+            const initPrompt = appInfo.value!.initPrompt || ''
+            if (initPrompt) {
+              // 添加用户消息到消息列表
+              messages.value.push({
+                role: 'user',
+                content: initPrompt,
+              })
+              
+              // 保存用户消息
+              try {
+                await saveMessage({
+                  appId: convertIdToString(appId.value) as any,
+                  message: initPrompt,
+                  messageType: 'user',
+                })
+              } catch (error) {
+                console.error('保存消息失败:', error)
+              }
+              
+              // 添加AI消息占位符
+              const aiMessageIndex = messages.value.length
+              messages.value.push({
+                role: 'ai',
+                content: '',
+                streaming: true,
+              })
+              
+              scrollToBottom()
+          // 调用生成代码接口
+          await generateCodeStream(initPrompt)
+            }
           }, 500)
         })
       }
@@ -518,6 +565,7 @@ const handleSendMessage = async () => {
   if (!inputText.value.trim() || streaming.value) return
 
   const userMessage = inputText.value.trim()
+  lastUserPrompt.value = userMessage
   inputText.value = ''
 
   messages.value.push({
@@ -585,6 +633,11 @@ const handleStreamComplete = (content: string) => {
 
 const generateCodeStream = async (userMessage: string) => {
   try {
+    // 防止重复调用：已有流或连接未关闭时直接返回
+    if (streaming.value || sseConnection) {
+      return
+    }
+    lastUserPrompt.value = userMessage
     streaming.value = true
 
     const aiMessageIndex = messages.value.length - 1
@@ -604,8 +657,12 @@ const generateCodeStream = async (userMessage: string) => {
             const chunk = jsonData.d || ''
             if (chunk) {
               accumulatedContent += chunk
-              messages.value[aiMessageIndex].content = accumulatedContent
-              messages.value[aiMessageIndex].streaming = true
+              const aiMessage = messages.value[aiMessageIndex]
+              if (aiMessage) {
+                aiMessage.content = accumulatedContent
+                aiMessage.streaming = true
+                aiMessage.error = false
+              }
               
               // 实时解析代码文件
               codeFiles.value = parseCodeFiles(accumulatedContent)
@@ -615,8 +672,12 @@ const generateCodeStream = async (userMessage: string) => {
           } catch (error) {
             if (msg.data) {
               accumulatedContent += msg.data
-              messages.value[aiMessageIndex].content = accumulatedContent
-              messages.value[aiMessageIndex].streaming = true
+              const aiMessage = messages.value[aiMessageIndex]
+              if (aiMessage) {
+                aiMessage.content = accumulatedContent
+                aiMessage.streaming = true
+                aiMessage.error = false
+              }
               codeFiles.value = parseCodeFiles(accumulatedContent)
               scrollToBottom()
             }
@@ -624,24 +685,48 @@ const generateCodeStream = async (userMessage: string) => {
         },
         onError: (error) => {
           console.error('SSE error:', error)
-          messages.value[aiMessageIndex].streaming = false
+          const aiMessage = messages.value[aiMessageIndex]
+          if (aiMessage) {
+            aiMessage.streaming = false
+            aiMessage.error = true
+            aiMessage.content = '服务器繁忙，请稍后重试'
+            aiMessage.retryPrompt = lastUserPrompt.value
+          }
           streaming.value = false
-          if (!accumulatedContent) {
-            message.error('生成代码失败，请重试')
-            messages.value.splice(aiMessageIndex, 1)
-          } else {
+          closeSSEConnection(sseConnection)
+          sseConnection = null
+          if (accumulatedContent) {
             handleStreamComplete(accumulatedContent)
+          } else {
+            message.error('生成代码失败，请重试')
           }
         },
         onComplete: () => {
           handleStreamComplete(accumulatedContent)
+          closeSSEConnection(sseConnection)
+          sseConnection = null
         },
       },
     )
   } catch (error) {
     streaming.value = false
+    const aiMessageIndex = messages.value.length - 1
+    const aiMessage = messages.value[aiMessageIndex]
+    if (aiMessage) {
+      aiMessage.streaming = false
+      aiMessage.error = true
+      aiMessage.content = '服务器繁忙，请稍后重试'
+      aiMessage.retryPrompt = lastUserPrompt.value
+    }
     message.error('生成代码失败，请稍后再试')
   }
+}
+
+const handleRetry = async (prompt?: string) => {
+  const retryPrompt = prompt || lastUserPrompt.value
+  if (!retryPrompt || streaming.value) return
+  inputText.value = retryPrompt
+  await handleSendMessage()
 }
 
 const updatePreviewUrl = () => {
@@ -753,6 +838,8 @@ onUnmounted(() => {
   background: #ffffff;
   border-right: 1px solid rgba(0, 0, 0, 0.06);
   overflow: hidden;
+  position: relative;
+  z-index: 1;
 }
 
 .guide-container {
@@ -881,11 +968,30 @@ onUnmounted(() => {
   font-size: 13px;
 }
 
+.error-box {
+  border: 1px solid rgba(255, 0, 0, 0.2);
+  background: rgba(255, 0, 0, 0.04);
+  border-radius: 12px;
+  padding: 12px 16px;
+}
+
+.error-text {
+  margin: 0 0 8px;
+  color: #c53030;
+}
+
+.error-actions {
+  display: flex;
+  gap: 8px;
+}
+
 .input-container {
   flex-shrink: 0;
   padding: 16px 24px;
   border-top: 1px solid rgba(0, 0, 0, 0.06);
   background: #ffffff;
+  position: relative;
+  z-index: 10;
 }
 
 /* 右侧：代码编辑器 */
@@ -896,6 +1002,7 @@ onUnmounted(() => {
   flex-direction: column;
   background: #1e293b;
   overflow: hidden;
+  position: relative;
 }
 
 .code-header {

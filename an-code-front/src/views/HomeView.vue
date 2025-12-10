@@ -28,7 +28,7 @@
                 <span>{{ displayPrompt }}</span>
                 <span class="cursor"></span>
               </div>
-              <button class="floating-send" @click="handleQuickPrompt(typewriterPrompts[0])">
+              <button class="floating-send" @click="handleCreateApp">
                 <SendOutlined />
               </button>
             </div>
@@ -39,6 +39,12 @@
             </div>
           </div>
           <div class="input-actions">
+            <a-select
+              v-model:value="codeGenType"
+              class="gen-type-select"
+              size="large"
+              :options="genTypeOptions"
+            />
             <a-upload :show-upload-list="false">
               <a-button class="ghost-btn">
                 <template #icon>
@@ -134,11 +140,13 @@
 </template>
 
 <script setup lang="ts">
+// @ts-nocheck
 import { computed, ref, onMounted, onUnmounted } from 'vue'
 import { message } from 'ant-design-vue'
 import { CloudUploadOutlined, SendOutlined } from '@ant-design/icons-vue'
 import { useRouter } from 'vue-router'
 import { createApp, pageMyApps, pageFeaturedApps, deleteMyApp } from '../api/appController'
+import { createSSEConnection, closeSSEConnection } from '@/utils/sse'
 import { convertIdToString } from '@/utils/idConverter'
 import type { AppVO } from '@/api/typings'
 
@@ -147,6 +155,13 @@ const router = useRouter()
 // 提示词输入
 const promptText = ref('')
 const creating = ref(false)
+
+// 生成类型选择
+const codeGenType = ref('multi_file')
+const genTypeOptions = [
+  { label: '多文件', value: 'multi_file' },
+  { label: '单文件', value: 'html' },
+]
 
 // 快捷提示词
 const quickPrompts = ref([
@@ -212,7 +227,7 @@ const showcaseWorks = computed<AppVO[]>(() => myAppsList.value.slice(0, 4))
 const startTypewriter = () => {
   stopTypewriter()
   typewriterTimer = window.setInterval(() => {
-    const current = typewriterPrompts[promptIndex]
+    const current = typewriterPrompts[promptIndex] || ''
     if (!deleting) {
       if (typingIndex < current.length) {
         displayPrompt.value += current.charAt(typingIndex)
@@ -257,14 +272,51 @@ const handleCreateApp = async () => {
 
   try {
     creating.value = true
+    const initPrompt = promptText.value.trim()
+    
+    // 创建应用
     const response = await createApp({
-      initPrompt: promptText.value.trim(),
-      codeGenType: 'vue',
+      initPrompt,
+      codeGenType: codeGenType.value,
     })
 
     if (response.data?.code === 0 && response.data?.data) {
-      message.success('应用创建成功')
       const appId = response.data.data
+      
+      // 创建应用后立即调用生成代码接口（SSE流式接口）
+      try {
+        const url = `http://localhost:8102/api/app/chat/gen/code`
+        const sseConnection = createSSEConnection(
+          url,
+          {
+            appId: convertIdToString(appId) as any,
+            message: initPrompt,
+          },
+          {
+            onMessage: () => {
+              // 不处理消息，因为用户会跳转到ChatView页面查看结果
+            },
+            onError: (error) => {
+              console.error('生成代码失败:', error)
+            },
+            onComplete: () => {
+              // 代码生成完成，关闭连接
+              closeSSEConnection(sseConnection)
+            },
+          }
+        )
+        
+        // 延迟关闭连接，给后端一些时间开始处理
+        setTimeout(() => {
+          closeSSEConnection(sseConnection)
+        }, 1000)
+        
+        message.success('应用创建成功，代码生成中...')
+      } catch (genError) {
+        console.error('触发代码生成失败:', genError)
+        message.success('应用创建成功')
+      }
+      
       promptText.value = ''
       // 跳转到对话页面，添加 view=1 参数避免自动发送消息
       router.push(`/app/chat/${appId}?view=1`)
@@ -332,6 +384,13 @@ const handleTabChange = (key: string) => {
 // 查看对话
 const handleViewChat = (appId: number) => {
   router.push(`/app/chat/${appId}`)
+}
+
+const handleImageError = (e: Event) => {
+  const target = e.target as HTMLImageElement
+  if (target) {
+    target.style.display = 'none'
+  }
 }
 
 // 编辑应用
@@ -478,8 +537,10 @@ onUnmounted(() => {
   pointer-events: none;
   color: rgba(15, 23, 42, 0.4);
   font-size: 16px;
-  display: flex;
-  align-items: center;
+  line-height: 1.7;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  overflow-wrap: break-word;
 }
 
 .cursor {
@@ -545,6 +606,34 @@ onUnmounted(() => {
   gap: 12px;
   margin-top: 16px;
   justify-content: center;
+  align-items: center;
+}
+
+.gen-type-select {
+  min-width: 120px;
+}
+
+.gen-type-select :deep(.ant-select-selector) {
+  border-radius: 999px;
+  border: 1px solid rgba(38, 103, 255, 0.5);
+  background: transparent;
+  color: #0f1d7a;
+  height: 40px;
+  display: flex;
+  align-items: center;
+}
+
+.gen-type-select :deep(.ant-select-selector:hover) {
+  border-color: rgba(38, 103, 255, 0.7);
+}
+
+.gen-type-select :deep(.ant-select-selection-item) {
+  color: #0f1d7a;
+  line-height: 38px;
+}
+
+.gen-type-select :deep(.ant-select-arrow) {
+  color: #0f1d7a;
 }
 
 .ghost-btn {
