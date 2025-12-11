@@ -58,6 +58,17 @@ export function createSSEConnection(
     withCredentials: true,
   })
   
+  // 添加防重复执行机制：确保onComplete只被调用一次
+  let isCompleted = false
+  const safeOnComplete = () => {
+    if (!isCompleted) {
+      isCompleted = true
+      options.onComplete?.()
+    } else {
+      console.warn('SSE onComplete 已被调用，忽略重复调用')
+    }
+  }
+  
   // 添加连接保活机制：定期检查连接状态
   let lastMessageTime = Date.now()
   const keepAliveInterval = setInterval(() => {
@@ -96,25 +107,25 @@ export function createSSEConnection(
   // 处理自定义事件（如 done 事件）
   eventSource.addEventListener('done', (event: any) => {
     console.log('SSE done 事件触发')
-    options.onComplete?.()
+    safeOnComplete()
   })
 
   // 监听所有自定义事件，包括可能的完成事件
   eventSource.addEventListener('complete', (event: any) => {
     console.log('SSE complete 事件触发')
-    options.onComplete?.()
+    safeOnComplete()
   })
 
   // 处理错误
   eventSource.onerror = (error) => {
     console.error('SSE error:', error, 'readyState:', eventSource.readyState)
     options.onError?.(error)
-    // 如果连接关闭，调用完成回调
+    // 如果连接关闭，调用完成回调（但只调用一次）
     if (eventSource.readyState === EventSource.CLOSED) {
       console.log('SSE 连接已关闭，触发完成回调')
       // 延迟一点确保所有消息都已处理
       setTimeout(() => {
-        options.onComplete?.()
+        safeOnComplete()
       }, 100)
     }
   }
@@ -123,7 +134,7 @@ export function createSSEConnection(
   eventSource.addEventListener('close', () => {
     console.log('SSE close 事件触发')
     setTimeout(() => {
-      options.onComplete?.()
+      safeOnComplete()
     }, 100)
   })
 

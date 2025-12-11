@@ -1204,12 +1204,21 @@ const generateCodeStream = async (userMessage: string) => {
           }
         },
         onComplete: () => {
+          // 防止重复执行：检查是否已经处理过完成逻辑
+          if (!streaming.value) {
+            console.warn('onComplete 被重复调用，已忽略')
+            return
+          }
+          
           console.log('=== SSE onComplete 回调触发 ===', {
             accumulatedContentLength: accumulatedContent.length,
             streaming: streaming.value,
             sseConnectionExists: !!sseConnection,
             hasAppInfo: !!(appInfo.value?.codeGenType && appInfo.value?.id)
           })
+          
+          // 立即设置streaming为false，防止重复执行
+          streaming.value = false
           
           // 清理超时定时器
           if (noDataTimeout !== null) {
@@ -1234,7 +1243,6 @@ const generateCodeStream = async (userMessage: string) => {
           }
           closeSSEConnection(sseConnection)
           sseConnection = null
-          streaming.value = false
         },
       },
     )

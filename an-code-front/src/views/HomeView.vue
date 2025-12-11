@@ -127,7 +127,6 @@
 </template>
 
 <script setup lang="ts">
-// @ts-nocheck
 import { computed, ref, onMounted, onUnmounted } from 'vue'
 import { message } from 'ant-design-vue'
 import { CloudUploadOutlined, SendOutlined } from '@ant-design/icons-vue'
