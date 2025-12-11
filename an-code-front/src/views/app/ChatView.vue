@@ -324,6 +324,49 @@ const deploying = ref(false)
 let sseConnection: EventSource | null = null
 const historyLoading = ref(false)
 
+// 性能优化：节流更新，避免频繁更新导致卡死
+let updateTimer: number | null = null
+let pendingUpdate: (() => void) | null = null
+let lastUpdateTime = 0
+const UPDATE_THROTTLE_MS = 100 // 最多每100ms更新一次
+let scrollTimer: number | null = null
+let highlightTimer: number | null = null
+
+// 使用 requestAnimationFrame 优化更新
+const scheduleUpdate = (updateFn: () => void) => {
+  pendingUpdate = updateFn
+  
+  if (updateTimer === null) {
+    const now = Date.now()
+    const timeSinceLastUpdate = now - lastUpdateTime
+    
+    if (timeSinceLastUpdate >= UPDATE_THROTTLE_MS) {
+      // 立即执行
+      requestAnimationFrame(() => {
+        if (pendingUpdate) {
+          pendingUpdate()
+          pendingUpdate = null
+          lastUpdateTime = Date.now()
+        }
+        updateTimer = null
+      })
+    } else {
+      // 延迟执行
+      const delay = UPDATE_THROTTLE_MS - timeSinceLastUpdate
+      updateTimer = window.setTimeout(() => {
+        requestAnimationFrame(() => {
+          if (pendingUpdate) {
+            pendingUpdate()
+            pendingUpdate = null
+            lastUpdateTime = Date.now()
+          }
+          updateTimer = null
+        })
+      }, delay)
+    }
+  }
+}
+
 const canDeploy = computed(() => {
   return appInfo.value?.codeGenType && appInfo.value?.id && previewLoaded.value
 })
@@ -397,18 +440,31 @@ const renderGuideSteps = (content: string): string => {
   return steps.join('')
 }
 
-// 解析代码文件
+// 解析代码文件 - 优化性能，避免大内容导致卡死
 const parseCodeFiles = (content: string) => {
   const files: CodeFile[] = []
   const fileMap = new Map<string, CodeFile>()
   const completedFiles = new Set<string>() // 已完成的文件
   const generatingFiles = new Set<string>() // 正在生成的文件
   
+  // 如果内容过大，限制处理长度（避免卡死）
+  const maxContentLength = 500000 // 500KB
+  const contentToProcess = content.length > maxContentLength 
+    ? content.substring(0, maxContentLength) 
+    : content
+  
   // 匹配完整的代码块：```lang filename\ncode```
   const codeBlockRegex = /```(\w+)?\s*([^\n]+)?\n([\s\S]*?)```/g
   let match
+  let matchCount = 0
+  const maxMatches = 100 // 限制最大匹配次数，避免无限循环
   
-  while ((match = codeBlockRegex.exec(content)) !== null) {
+  while ((match = codeBlockRegex.exec(contentToProcess)) !== null) {
+    matchCount++
+    if (matchCount > maxMatches) {
+      console.warn('代码块数量过多，停止解析以避免性能问题')
+      break
+    }
     const language = match[1] || 'text'
     const fileName = match[2]?.trim() || `file.${getDefaultExtension(language)}`
     const code = match[3].trim()
@@ -428,8 +484,15 @@ const parseCodeFiles = (content: string) => {
   // 使用更精确的正则表达式匹配未完成的代码块
   const unclosedCodeBlockRegex = /```(\w+)?\s*([^\n]+)?\n([\s\S]*?)(?=```|$)/g
   let unclosedMatch
+  let unclosedMatchCount = 0
+  const maxUnclosedMatches = 50 // 限制未完成代码块的匹配次数
   
-  while ((unclosedMatch = unclosedCodeBlockRegex.exec(content)) !== null) {
+  while ((unclosedMatch = unclosedCodeBlockRegex.exec(contentToProcess)) !== null) {
+    unclosedMatchCount++
+    if (unclosedMatchCount > maxUnclosedMatches) {
+      console.warn('未完成代码块数量过多，停止解析以避免性能问题')
+      break
+    }
     const language = unclosedMatch[1] || 'text'
     const fileName = unclosedMatch[2]?.trim() || `file.${getDefaultExtension(language)}`
     const code = unclosedMatch[3] || ''
@@ -446,7 +509,7 @@ const parseCodeFiles = (content: string) => {
     if (!fileMap.has(fileName) || code.length > (fileMap.get(fileName)?.content.length || 0)) {
       // 检查是否是未闭合的（在内容末尾查找是否有结束的```）
       const blockEnd = unclosedMatch.index + unclosedMatch[0].length
-      const remainingContent = content.substring(blockEnd)
+      const remainingContent = contentToProcess.substring(blockEnd)
       const hasClosingBackticks = remainingContent.trim().startsWith('```')
       const isUnclosed = !hasClosingBackticks
       
@@ -954,6 +1017,8 @@ const generateCodeStream = async (userMessage: string) => {
             const chunk = jsonData.d || ''
             if (chunk) {
               accumulatedContent += chunk
+              
+              // 立即更新消息内容（这个更新很快，不需要节流）
               const aiMessage = messages.value[aiMessageIndex]
               if (aiMessage) {
                 aiMessage.content = accumulatedContent
@@ -961,73 +1026,78 @@ const generateCodeStream = async (userMessage: string) => {
                 aiMessage.error = false
               }
               
-              // 实时解析代码文件
-              const newFiles = parseCodeFiles(accumulatedContent)
-              const oldFilesCount = codeFiles.value.length
-              codeFiles.value = newFiles
-              
-              // 智能切换文件：优先显示正在生成的文件
-              if (newFiles.length > 0) {
-                // 如果有新文件出现，切换到第一个新文件
-                if (newFiles.length > oldFilesCount) {
-                  activeFileIndex.value = oldFilesCount
-                } else {
-                  // 查找正在生成的文件
-                  const generatingIndex = newFiles.findIndex(f => f.isGenerating)
-                  if (generatingIndex !== -1) {
-                    // 如果当前文件已完成，切换到正在生成的文件
-                    const currentFile = newFiles[activeFileIndex.value]
-                    if (currentFile?.isComplete && generatingIndex !== activeFileIndex.value) {
-                      activeFileIndex.value = generatingIndex
+              // 使用节流更新代码文件和DOM（避免频繁解析和更新导致卡死）
+              scheduleUpdate(() => {
+                // 实时解析代码文件
+                const newFiles = parseCodeFiles(accumulatedContent)
+                const oldFilesCount = codeFiles.value.length
+                codeFiles.value = newFiles
+                
+                // 智能切换文件：优先显示正在生成的文件（仅在用户未手动切换时）
+                if (newFiles.length > 0) {
+                  // 如果有新文件出现，切换到第一个新文件
+                  if (newFiles.length > oldFilesCount) {
+                    activeFileIndex.value = oldFilesCount
+                  } else {
+                    // 查找正在生成的文件
+                    const generatingIndex = newFiles.findIndex(f => f.isGenerating)
+                    if (generatingIndex !== -1) {
+                      // 如果当前文件已完成，切换到正在生成的文件
+                      const currentFile = newFiles[activeFileIndex.value]
+                      if (currentFile?.isComplete && generatingIndex !== activeFileIndex.value) {
+                        activeFileIndex.value = generatingIndex
+                      }
                     }
+                  }
+                  
+                  // 确保索引有效
+                  if (activeFileIndex.value >= newFiles.length) {
+                    activeFileIndex.value = newFiles.length - 1
                   }
                 }
                 
-                // 确保索引有效
-                if (activeFileIndex.value >= newFiles.length) {
-                  activeFileIndex.value = newFiles.length - 1
-                }
-              }
-              
-              scrollToBottom()
+                scrollToBottom()
+              })
             }
           } catch (error) {
             if (msg.data) {
               accumulatedContent += msg.data
+              
+              // 立即更新消息内容
               const aiMessage = messages.value[aiMessageIndex]
               if (aiMessage) {
                 aiMessage.content = accumulatedContent
                 aiMessage.streaming = true
                 aiMessage.error = false
               }
-              const newFiles = parseCodeFiles(accumulatedContent)
-              const oldFilesCount = codeFiles.value.length
-              codeFiles.value = newFiles
               
-              // 智能切换文件：优先显示正在生成的文件
-              if (newFiles.length > 0) {
-                // 如果有新文件出现，切换到第一个新文件
-                if (newFiles.length > oldFilesCount) {
-                  activeFileIndex.value = oldFilesCount
-                } else {
-                  // 查找正在生成的文件
-                  const generatingIndex = newFiles.findIndex(f => f.isGenerating)
-                  if (generatingIndex !== -1) {
-                    // 如果当前文件已完成，切换到正在生成的文件
-                    const currentFile = newFiles[activeFileIndex.value]
-                    if (currentFile?.isComplete && generatingIndex !== activeFileIndex.value) {
-                      activeFileIndex.value = generatingIndex
+              // 使用节流更新代码文件
+              scheduleUpdate(() => {
+                const newFiles = parseCodeFiles(accumulatedContent)
+                const oldFilesCount = codeFiles.value.length
+                codeFiles.value = newFiles
+                
+                // 智能切换文件：优先显示正在生成的文件
+                if (newFiles.length > 0) {
+                  if (newFiles.length > oldFilesCount) {
+                    activeFileIndex.value = oldFilesCount
+                  } else {
+                    const generatingIndex = newFiles.findIndex(f => f.isGenerating)
+                    if (generatingIndex !== -1) {
+                      const currentFile = newFiles[activeFileIndex.value]
+                      if (currentFile?.isComplete && generatingIndex !== activeFileIndex.value) {
+                        activeFileIndex.value = generatingIndex
+                      }
                     }
+                  }
+                  
+                  if (activeFileIndex.value >= newFiles.length) {
+                    activeFileIndex.value = newFiles.length - 1
                   }
                 }
                 
-                // 确保索引有效
-                if (activeFileIndex.value >= newFiles.length) {
-                  activeFileIndex.value = newFiles.length - 1
-                }
-              }
-              
-              scrollToBottom()
+                scrollToBottom()
+              })
             }
           }
         },
@@ -1225,12 +1295,20 @@ const handleDeploy = async () => {
   }
 }
 
+// 滚动到底部 - 使用节流优化性能
 const scrollToBottom = () => {
-  nextTick(() => {
-    if (guideContainerRef.value) {
-      guideContainerRef.value.scrollTop = guideContainerRef.value.scrollHeight
-    }
-  })
+  if (scrollTimer !== null) {
+    return // 如果已有待执行的滚动，跳过
+  }
+  
+  scrollTimer = window.setTimeout(() => {
+    nextTick(() => {
+      if (guideContainerRef.value) {
+        guideContainerRef.value.scrollTop = guideContainerRef.value.scrollHeight
+      }
+    })
+    scrollTimer = null
+  }, 50) // 最多每50ms滚动一次
 }
 
 watch(
@@ -1330,6 +1408,19 @@ onMounted(() => {
 
 onUnmounted(() => {
   closeSSEConnection(sseConnection)
+  // 清理定时器
+  if (updateTimer !== null) {
+    clearTimeout(updateTimer)
+    updateTimer = null
+  }
+  if (scrollTimer !== null) {
+    clearTimeout(scrollTimer)
+    scrollTimer = null
+  }
+  if (highlightTimer !== null) {
+    clearTimeout(highlightTimer)
+    highlightTimer = null
+  }
 })
 </script>
 
