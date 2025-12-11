@@ -154,11 +154,12 @@
             <div class="preview-content">
               <iframe
                 v-if="previewEnabled && previewUrl"
+                :key="previewUrl"
                 :src="previewUrl"
                 frameborder="0"
                 class="preview-iframe"
                 @load="handlePreviewLoad"
-                @error="() => { previewLoaded.value = false; console.error('预览加载失败:', previewUrl) }"
+                @error="handlePreviewError"
               ></iframe>
               <div v-else-if="!previewEnabled" class="preview-empty">
                 <a-empty description="预览已关闭" />
@@ -398,21 +399,27 @@ const parseCodeFiles = (content: string) => {
     // 检查这个代码块是否已经完成（在完整代码块匹配中）
     const isComplete = completedFiles.has(fileName)
     
+    // 如果文件已经完成，跳过未完成代码块的处理，使用完整版本
+    if (isComplete) {
+      continue
+    }
+    
     // 如果这个文件还没有完整版本，或者当前内容更长，则更新
     if (!fileMap.has(fileName) || code.length > (fileMap.get(fileName)?.content.length || 0)) {
       // 检查是否是未闭合的（在内容末尾查找是否有结束的```）
       const blockEnd = unclosedMatch.index + unclosedMatch[0].length
       const remainingContent = content.substring(blockEnd)
       const hasClosingBackticks = remainingContent.trim().startsWith('```')
-      const isUnclosed = !hasClosingBackticks && !isComplete
+      const isUnclosed = !hasClosingBackticks
       
-      const isGenerating = isUnclosed || (!isComplete && code.length > 0)
+      // 只有在未闭合时才标记为正在生成
+      const isGenerating = isUnclosed
       
       fileMap.set(fileName, {
         name: fileName,
         content: code.trim(),
         language: language,
-        isComplete: isComplete,
+        isComplete: false,
         isGenerating: isGenerating,
       })
       
@@ -576,7 +583,13 @@ const loadChatHistory = async () => {
       // 解析最后一个AI消息的代码文件
       const lastAiMessage = messages.value.filter(m => m.role === 'ai').pop()
       if (lastAiMessage) {
-        codeFiles.value = parseCodeFiles(lastAiMessage.content)
+        const parsedFiles = parseCodeFiles(lastAiMessage.content)
+        // 历史消息中的文件都是已完成的
+        codeFiles.value = parsedFiles.map(file => ({
+          ...file,
+          isComplete: true,
+          isGenerating: false,
+        }))
         // 如果有代码文件，更新预览URL
         if (codeFiles.value.length > 0) {
           nextTick(() => {
@@ -728,8 +741,14 @@ const handleStreamComplete = (content: string) => {
       console.error('保存消息失败:', error)
     })
 
-    // 解析代码文件
-    codeFiles.value = parseCodeFiles(content)
+    // 解析代码文件，流完成后所有文件都应该标记为已完成
+    const parsedFiles = parseCodeFiles(content)
+    // 确保所有文件都标记为已完成，不再生成
+    codeFiles.value = parsedFiles.map(file => ({
+      ...file,
+      isComplete: true,
+      isGenerating: false,
+    }))
     if (codeFiles.value.length > 0) {
       activeFileIndex.value = 0
     }
@@ -903,15 +922,28 @@ const updatePreviewUrl = () => {
     if (previewUrl.value !== newUrl) {
       previewLoaded.value = false
       previewUrl.value = newUrl
-    } else {
+      console.log('更新预览URL:', newUrl)
+    } else if (!previewUrl.value) {
       previewUrl.value = newUrl
+      console.log('设置预览URL:', newUrl)
     }
+  } else {
+    console.warn('无法更新预览URL：缺少必要信息', {
+      codeGenType: appInfo.value?.codeGenType,
+      id: appInfo.value?.id
+    })
   }
 }
 
 const handlePreviewLoad = () => {
   previewLoaded.value = true
   console.log('预览页面加载完成:', previewUrl.value)
+}
+
+const handlePreviewError = () => {
+  previewLoaded.value = false
+  console.error('预览加载失败:', previewUrl.value)
+  message.warning('预览加载失败，请检查后端服务是否正常运行')
 }
 
 const handleRefreshPreview = () => {
@@ -922,6 +954,10 @@ const refreshPreview = () => {
   if (!previewUrl.value) {
     updatePreviewUrl()
   }
+  if (!previewUrl.value) {
+    console.warn('无法刷新预览：预览URL为空')
+    return
+  }
   previewLoaded.value = false
   // 强制刷新iframe
   nextTick(() => {
@@ -929,7 +965,11 @@ const refreshPreview = () => {
     if (iframe) {
       // 添加时间戳防止缓存
       const separator = previewUrl.value.includes('?') ? '&' : '?'
-      iframe.src = previewUrl.value + separator + '_t=' + Date.now()
+      const newUrl = previewUrl.value + separator + '_t=' + Date.now()
+      iframe.src = newUrl
+      console.log('刷新预览:', newUrl)
+    } else {
+      console.warn('无法刷新预览：找不到iframe元素')
     }
   })
 }
@@ -1545,11 +1585,11 @@ onUnmounted(() => {
 .preview-content {
   flex: 1;
   min-height: 0;
-  overflow-y: auto;
-  overflow-x: auto;
+  overflow: hidden;
   background: #ffffff;
-  scrollbar-width: thin;
-  scrollbar-color: rgba(0, 0, 0, 0.2) transparent;
+  position: relative;
+  display: flex;
+  flex-direction: column;
 }
 
 .preview-content::-webkit-scrollbar {
@@ -1576,6 +1616,12 @@ onUnmounted(() => {
   min-height: 100%;
   border: none;
   display: block;
+  background: #ffffff;
+  flex: 1;
+}
+
+.preview-iframe[src=""] {
+  display: none;
 }
 
 .preview-empty {
@@ -1584,6 +1630,7 @@ onUnmounted(() => {
   justify-content: center;
   flex: 1;
   min-height: 0;
+  background: #fafafa;
 }
 
 .empty-messages {
