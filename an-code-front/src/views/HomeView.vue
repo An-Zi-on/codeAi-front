@@ -4,9 +4,8 @@
     <div class="home-container">
       <section class="hero-section">
         <div class="hero-text">
-          <p class="hero-eyebrow">AI·NoCode·极速创造</p>
-          <h1>一句话 呈所想</h1>
-          <p class="hero-subtitle">与 AI 对话，轻松创建应用和网站</p>
+          <h1>AI 应用生成平台</h1>
+          <p class="hero-subtitle">一句话轻松创建网站应用</p>
         </div>
 
         <div class="hero-input">
@@ -22,20 +21,12 @@
                 :auto-size="{ minRows: 3, maxRows: 3 }"
                 :bordered="false"
                 class="hero-textarea"
+                placeholder="帮我创建个人博客网站"
                 @press-enter="handleCreateApp"
               />
-              <div class="hero-placeholder" v-if="!promptText">
-                <span>{{ displayPrompt }}</span>
-                <span class="cursor"></span>
-              </div>
               <button class="floating-send" @click="handleCreateApp">
                 <SendOutlined />
               </button>
-            </div>
-            <div class="hero-suggestions">
-              <span v-for="prompt in typewriterPrompts" :key="prompt" @click="handleQuickPrompt(prompt)">
-                {{ prompt.slice(0, 12) }}...
-              </span>
             </div>
           </div>
           <div class="input-actions">
@@ -45,29 +36,25 @@
               size="large"
               :options="genTypeOptions"
             />
-            <a-upload :show-upload-list="false">
-              <a-button class="ghost-btn">
-                <template #icon>
-                  <CloudUploadOutlined />
-                </template>
-                上传
-              </a-button>
-            </a-upload>
             <a-button class="ghost-btn" :loading="creating" @click="handleCreateApp">
               创建
             </a-button>
           </div>
         </div>
 
-        <div class="quick-tags">
-          <a-tag
-            v-for="tag in quickTags"
-            :key="tag"
-            class="quick-tag"
-            @click="handleQuickPrompt(tag)"
+        <div class="quick-prompts">
+          <div
+            v-for="prompt in quickPrompts"
+            :key="prompt.title"
+            class="quick-prompt-card"
+            @click="handleQuickPrompt(prompt.text)"
           >
-            {{ tag }}
-          </a-tag>
+            <div class="prompt-icon">{{ prompt.icon }}</div>
+            <div class="prompt-content">
+              <h3 class="prompt-title">{{ prompt.title }}</h3>
+              <p class="prompt-desc">{{ prompt.desc }}</p>
+            </div>
+          </div>
         </div>
       </section>
 
@@ -168,42 +155,27 @@ const quickPrompts = ref([
     icon: '📝',
     title: '个人博客网站',
     desc: '创建一个现代化的个人博客网站，包含文章列表、分类标签、搜索功能、响应式设计，支持 Markdown 格式的文章编辑和展示。',
-    text: '帮我创建一个现代化的个人博客网站，需要包含以下功能：1. 文章列表展示页面，支持分页和分类筛选；2. 文章详情页面，支持 Markdown 格式渲染；3. 文章搜索功能；4. 响应式设计，适配手机和电脑；5. 简洁美观的 UI 设计，使用现代化的配色方案。',
+    text: '帮我创建一个现代化的个人博客网站，需要包含以下功能：1. 文章列表展示页面，支持分页和分类筛选，每篇文章显示标题、摘要、发布时间和阅读量；2. 文章详情页面，支持 Markdown 格式渲染，包含代码高亮、图片展示、目录导航；3. 文章搜索功能，支持关键词搜索和标签筛选；4. 响应式设计，完美适配手机、平板和电脑；5. 简洁美观的 UI 设计，使用现代化的配色方案，支持深色模式切换。',
   },
   {
     icon: '🛒',
     title: '电商产品展示',
     desc: '创建一个电商产品展示网站，包含产品列表、详情页、购物车、用户中心等功能，界面美观易用。',
-    text: '帮我创建一个电商产品展示网站，需要包含以下功能：1. 产品列表页面，支持分类筛选和搜索；2. 产品详情页面，展示产品图片、价格、描述等信息；3. 购物车功能，可以添加和删除商品；4. 用户中心页面；5. 响应式设计，适配各种设备；6. 使用现代化的 UI 设计风格。',
+    text: '帮我创建一个电商产品展示网站，需要包含以下功能：1. 产品列表页面，支持分类筛选、价格排序和关键词搜索，展示产品缩略图、名称、价格和评分；2. 产品详情页面，展示多张产品图片、详细描述、规格选择、库存状态和用户评价；3. 购物车功能，可以添加、删除、修改商品数量和批量结算；4. 用户中心页面，包含订单管理、收货地址和个人信息；5. 响应式设计，适配各种设备；6. 使用现代化的 UI 设计风格，包含动画效果和交互反馈。',
   },
   {
     icon: '📊',
-    title: '数据可视化仪表盘',
-    desc: '创建一个数据可视化仪表盘，包含多种图表类型、数据筛选、实时更新等功能，适合展示业务数据。',
-    text: '帮我创建一个数据可视化仪表盘，需要包含以下功能：1. 多种图表类型（折线图、柱状图、饼图等）；2. 数据筛选和日期范围选择；3. 实时数据更新；4. 响应式布局；5. 现代化的设计风格，使用渐变色和阴影效果；6. 数据导出功能。',
+    title: '企业官网展示',
+    desc: '创建一个专业的企业官网，包含首页、关于我们、产品服务、新闻动态、联系我们等模块，展现企业形象。',
+    text: '帮我创建一个专业的企业官网，需要包含以下功能：1. 首页轮播图展示，包含企业介绍、核心产品和服务亮点；2. 关于我们页面，介绍公司历史、团队文化和企业愿景；3. 产品服务页面，分类展示产品详情和服务内容，支持在线咨询；4. 新闻动态页面，展示企业新闻、行业资讯和活动公告；5. 联系我们页面，包含公司地址、联系方式、在线留言表单和地图定位；6. 响应式设计，适配各种设备；7. 使用专业大气的设计风格，突出企业品牌形象。',
   },
   {
-    icon: '📅',
-    title: '任务管理工具',
-    desc: '创建一个任务管理工具，支持任务创建、编辑、删除、状态切换、优先级设置等功能，帮助提高工作效率。',
-    text: '帮我创建一个任务管理工具，需要包含以下功能：1. 任务列表展示，支持按状态、优先级筛选；2. 任务创建和编辑功能；3. 任务状态切换（待办、进行中、已完成）；4. 任务优先级设置；5. 任务搜索功能；6. 响应式设计，支持移动端使用；7. 简洁直观的 UI 界面。',
+    icon: '🎨',
+    title: '作品集展示网站',
+    desc: '创建一个精美的作品集展示网站，适合设计师、摄影师、开发者等展示个人作品和技能。',
+    text: '帮我创建一个精美的作品集展示网站，需要包含以下功能：1. 首页展示个人简介、技能标签和精选作品预览；2. 作品展示页面，支持分类筛选（如UI设计、摄影、开发项目等），每个作品包含多张图片、项目描述和技术栈；3. 关于我页面，展示个人经历、教育背景、专业技能和联系方式；4. 博客/文章页面，分享设计思考、技术心得或行业见解；5. 联系表单，方便访客留言和合作咨询；6. 响应式设计，完美适配各种设备；7. 使用现代化、简洁的设计风格，突出作品展示效果，支持图片懒加载和动画过渡。',
   },
 ])
-
-const quickTags = ref(['博客/作品集', '企业网站', 'Landing Page', 'SaaS 控制台', '活动专题', '小程序'])
-
-const typewriterPrompts = [
-  '使用 NoCode 创建一个数据分析看板，用来分析运营指标和转化趋势……',
-  '帮我生成一个极简风格的作品集网站，包含首页、关于我、案例模块……',
-  '想要一个 SaaS 控制台，支持团队成员管理、权限设置和实时图表……',
-  '设计一个活动落地页，带有报名表单、倒计时和社交分享功能……',
-]
-const displayPrompt = ref('')
-let typewriterTimer: number | null = null
-let promptIndex = 0
-let typingIndex = 0
-let deleting = false
-let pauseFrames = 0
 
 // 我的应用
 const myAppsList = ref<AppVO[]>([])
@@ -223,39 +195,6 @@ const featuredAppsKeyword = ref('')
 
 const showcaseWorks = computed<AppVO[]>(() => myAppsList.value.slice(0, 4))
 
-const startTypewriter = () => {
-  stopTypewriter()
-  typewriterTimer = window.setInterval(() => {
-    const current = typewriterPrompts[promptIndex] || ''
-    if (!deleting) {
-      if (typingIndex < current.length) {
-        displayPrompt.value += current.charAt(typingIndex)
-        typingIndex++
-      } else {
-        pauseFrames++
-        if (pauseFrames > 18) {
-          deleting = true
-          pauseFrames = 0
-        }
-      }
-    } else {
-      if (typingIndex > 0) {
-        displayPrompt.value = displayPrompt.value.slice(0, -1)
-        typingIndex--
-      } else {
-        deleting = false
-        promptIndex = (promptIndex + 1) % typewriterPrompts.length
-      }
-    }
-  }, 120)
-}
-
-const stopTypewriter = () => {
-  if (typewriterTimer) {
-    clearInterval(typewriterTimer)
-    typewriterTimer = null
-  }
-}
 
 // 快捷提示词
 const handleQuickPrompt = (text: string) => {
@@ -381,11 +320,6 @@ const handleDeleteApp = async (appId: number) => {
 onMounted(() => {
   loadMyApps()
   loadFeaturedApps()
-  startTypewriter()
-})
-
-onUnmounted(() => {
-  stopTypewriter()
 })
 </script>
 
@@ -401,18 +335,25 @@ onUnmounted(() => {
 .gradient-bg {
   position: absolute;
   inset: 0;
-  background: radial-gradient(circle at 10% 10%, rgba(255, 255, 255, 0.35), transparent 45%),
-    radial-gradient(circle at 80% 0%, rgba(93, 173, 255, 0.35), transparent 35%),
-    linear-gradient(135deg, #c0d9ff 0%, #6ba6ff 35%, #2667ff 70%, #0f1d7a 100%);
-  animation: slowShift 20s ease infinite alternate;
+  width: 100%;
+  background: 
+    radial-gradient(circle at 20% 30%, rgba(59, 130, 246, 0.4), transparent 50%),
+    radial-gradient(circle at 80% 70%, rgba(37, 99, 235, 0.4), transparent 50%),
+    radial-gradient(circle at 50% 50%, rgba(29, 78, 216, 0.3), transparent 60%),
+    linear-gradient(135deg, #3b82f6 0%, #2563eb 25%, #1d4ed8 50%, #1e40af 75%, #1e3a8a 100%);
+  background-size: 200% 200%;
+  animation: gradientShift 15s ease infinite;
 }
 
-@keyframes slowShift {
-  from {
-    transform: scale(1);
+@keyframes gradientShift {
+  0% {
+    background-position: 0% 50%;
   }
-  to {
-    transform: scale(1.1);
+  50% {
+    background-position: 100% 50%;
+  }
+  100% {
+    background-position: 0% 50%;
   }
 }
 
@@ -426,28 +367,33 @@ onUnmounted(() => {
 
 .hero-section {
   text-align: center;
-  padding: 40px 0 48px;
+  padding: 60px 0 80px;
   color: white;
 }
 
-.hero-text .hero-eyebrow {
-  font-size: 14px;
-  letter-spacing: 0.4em;
-  text-transform: uppercase;
-  opacity: 0.8;
-  margin-bottom: 16px;
+.hero-text {
+  background: transparent;
+  padding: 0;
+  margin-bottom: 48px;
 }
 
 .hero-text h1 {
-  font-size: clamp(36px, 5vw, 64px);
-  font-weight: 700;
-  margin: 0;
+  font-size: clamp(42px, 6vw, 72px);
+  font-weight: 800;
+  margin: 0 0 16px;
+  background: linear-gradient(135deg, #ffffff 0%, #e0e7ff 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  text-shadow: 0 4px 20px rgba(255, 255, 255, 0.3);
 }
 
 .hero-subtitle {
-  font-size: 18px;
-  opacity: 0.9;
-  margin-top: 12px;
+  font-size: clamp(18px, 2.5vw, 24px);
+  opacity: 0.95;
+  margin: 0;
+  font-weight: 400;
+  letter-spacing: 0.5px;
 }
 
 .hero-input {
@@ -456,11 +402,12 @@ onUnmounted(() => {
 }
 
 .hero-window {
-  border-radius: 28px;
-  background: rgba(255, 255, 255, 0.92);
-  box-shadow: 0 30px 80px rgba(15, 23, 42, 0.16);
-  padding: 24px 24px 16px;
-  border: 1px solid rgba(255, 255, 255, 0.8);
+  border-radius: 24px;
+  background: rgba(255, 255, 255, 0.95);
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.15), 0 0 0 1px rgba(255, 255, 255, 0.5);
+  padding: 20px;
+  border: none;
+  backdrop-filter: blur(10px);
 }
 
 .window-dots {
@@ -478,48 +425,42 @@ onUnmounted(() => {
 
 .hero-textarea-wrapper {
   position: relative;
-  border-radius: 20px;
-  border: 1px solid rgba(15, 23, 42, 0.08);
-  background: white;
-  box-shadow: inset 0 1px 3px rgba(15, 23, 42, 0.08);
+  border-radius: 16px;
+  border: none;
+  background: transparent;
+  box-shadow: none;
 }
 
 .hero-textarea {
   font-size: 16px;
   line-height: 1.7;
-  padding: 20px 60px 20px 24px;
-  min-height: 140px;
+  padding: 20px 60px 20px 20px;
+  min-height: 120px;
+  background: rgba(255, 255, 255, 0.8);
+  border-radius: 16px;
+  border: 1px solid rgba(15, 23, 42, 0.1);
+  transition: all 0.3s ease;
+}
+
+.hero-textarea:hover {
+  background: rgba(255, 255, 255, 0.95);
+  border-color: rgba(99, 102, 241, 0.3);
+}
+
+.hero-textarea:focus-within {
+  background: rgba(255, 255, 255, 1);
+  border-color: rgba(99, 102, 241, 0.5);
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1);
 }
 
 .hero-textarea :deep(.ant-input) {
-  border-radius: 20px;
+  border: none;
+  background: transparent;
+  box-shadow: none;
 }
 
-.hero-placeholder {
-  position: absolute;
-  inset: 0;
-  padding: 20px 60px 20px 24px;
-  pointer-events: none;
+.hero-textarea :deep(.ant-input::placeholder) {
   color: rgba(15, 23, 42, 0.4);
-  font-size: 16px;
-  line-height: 1.7;
-  white-space: pre-wrap;
-  word-wrap: break-word;
-  overflow-wrap: break-word;
-}
-
-.cursor {
-  width: 2px;
-  height: 20px;
-  background: rgba(15, 23, 42, 0.6);
-  margin-left: 4px;
-  animation: blink 1s step-end infinite;
-}
-
-@keyframes blink {
-  50% {
-    opacity: 0;
-  }
 }
 
 .floating-send {
@@ -544,26 +485,58 @@ onUnmounted(() => {
   transform: translateY(-2px);
 }
 
-.hero-suggestions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 12px;
-  margin-top: 16px;
+.quick-prompts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 20px;
+  margin-top: 40px;
+  max-width: 1200px;
+  margin-left: auto;
+  margin-right: auto;
 }
 
-.hero-suggestions span {
-  padding: 4px 14px;
-  border-radius: 999px;
-  background: rgba(15, 23, 42, 0.06);
-  font-size: 13px;
-  color: rgba(15, 23, 42, 0.7);
+.quick-prompt-card {
+  background: rgba(255, 255, 255, 0.15);
+  backdrop-filter: blur(10px);
+  border-radius: 20px;
+  padding: 24px;
   cursor: pointer;
-  transition: background 0.2s, color 0.2s;
+  transition: all 0.3s ease;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
 }
 
-.hero-suggestions span:hover {
-  background: rgba(15, 23, 42, 0.1);
-  color: #0f172a;
+.quick-prompt-card:hover {
+  background: rgba(255, 255, 255, 0.25);
+  transform: translateY(-4px);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.15);
+  border-color: rgba(255, 255, 255, 0.4);
+}
+
+.prompt-icon {
+  font-size: 32px;
+  flex-shrink: 0;
+  line-height: 1;
+}
+
+.prompt-content {
+  flex: 1;
+}
+
+.prompt-title {
+  font-size: 18px;
+  font-weight: 600;
+  color: white;
+  margin: 0 0 8px;
+}
+
+.prompt-desc {
+  font-size: 14px;
+  color: rgba(255, 255, 255, 0.85);
+  margin: 0;
+  line-height: 1.6;
 }
 
 .input-actions {
@@ -622,28 +595,6 @@ onUnmounted(() => {
   color: #2667ff;
 }
 
-.quick-tags {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: center;
-  gap: 12px;
-  margin-top: 20px;
-}
-
-.quick-tag {
-  border-radius: 999px;
-  padding: 6px 18px;
-  border: 1px solid rgba(255, 255, 255, 0.8);
-  background: rgba(255, 255, 255, 0.15);
-  color: white;
-  cursor: pointer;
-  transition: background 0.2s, transform 0.2s;
-}
-
-.quick-tag:hover {
-  background: rgba(255, 255, 255, 0.3);
-  transform: translateY(-1px);
-}
 
 .works-section,
 .cases-section {
@@ -848,17 +799,17 @@ onUnmounted(() => {
   }
 
   .hero-window {
-    padding: 20px 20px 12px;
+    padding: 16px;
   }
 
   .hero-textarea {
-    padding: 16px 50px 16px 20px;
+    padding: 16px 50px 16px 16px;
     font-size: 14px;
   }
 
-  .hero-placeholder {
-    padding: 16px 50px 16px 20px;
-    font-size: 14px;
+  .quick-prompts {
+    grid-template-columns: 1fr;
+    gap: 16px;
   }
 }
 </style>

@@ -7,6 +7,9 @@
       <div class="header-right">
         <a-space>
           <a-button @click="showAppDetailModal = true">应用详情</a-button>
+          <a-button @click="showCodeView = !showCodeView">
+            {{ showCodeView ? '查看预览' : '查看代码' }}
+          </a-button>
           <a-button type="primary" :loading="deploying" :disabled="!canDeploy" @click="handleDeploy">
             部署应用
           </a-button>
@@ -107,9 +110,6 @@
             </div>
           </div>
           <div class="code-actions">
-            <a-button type="link" size="small" @click="showCodeView = !showCodeView">
-              {{ showCodeView ? '查看预览' : '查看代码' }}
-            </a-button>
             <a-button v-if="!showCodeView" type="link" size="small" @click="handleRefreshPreview">
               <template #icon><ReloadOutlined /></template>
               刷新预览
@@ -154,7 +154,7 @@
             <div class="preview-content">
               <iframe
                 v-if="previewEnabled && previewUrl"
-                :key="previewUrl"
+                :key="`preview-${previewUrl}-${previewKey}`"
                 :src="previewUrl"
                 frameborder="0"
                 class="preview-iframe"
@@ -166,6 +166,11 @@
               </div>
               <div v-else-if="!previewUrl" class="preview-empty">
                 <a-empty description="代码生成后将显示预览" />
+                <div style="margin-top: 16px; font-size: 12px; color: rgba(0, 0, 0, 0.45);">
+                  <p>预览URL: {{ previewUrl || '未设置' }}</p>
+                  <p>codeGenType: {{ appInfo?.codeGenType || '未设置' }}</p>
+                  <p>appId: {{ appInfo?.id || '未设置' }}</p>
+                </div>
               </div>
             </div>
           </div>
@@ -281,6 +286,7 @@ const previewUrl = ref('')
 const previewLoaded = ref(false)
 const previewEnabled = ref(true)
 const showCodeView = ref(true) // 控制显示代码还是预览
+const previewKey = ref(0) // 用于强制刷新iframe
 
 const deploying = ref(false)
 let sseConnection: EventSource | null = null
@@ -726,6 +732,15 @@ const handleSendMessage = async () => {
 }
 
 const handleStreamComplete = (content: string) => {
+  console.log('=== 代码生成完成回调触发 ===', {
+    contentLength: content?.length || 0,
+    hasContent: !!content,
+    appInfo: {
+      codeGenType: appInfo.value?.codeGenType,
+      id: appInfo.value?.id
+    }
+  })
+  
   const aiMessageIndex = messages.value.length - 1
   if (aiMessageIndex >= 0) {
     messages.value[aiMessageIndex].streaming = false
@@ -743,26 +758,49 @@ const handleStreamComplete = (content: string) => {
 
     // 解析代码文件，流完成后所有文件都应该标记为已完成
     const parsedFiles = parseCodeFiles(content)
+    console.log('解析后的代码文件:', {
+      fileCount: parsedFiles.length,
+      fileNames: parsedFiles.map(f => f.name)
+    })
+    
     // 确保所有文件都标记为已完成，不再生成
     codeFiles.value = parsedFiles.map(file => ({
       ...file,
       isComplete: true,
       isGenerating: false,
     }))
+    
     if (codeFiles.value.length > 0) {
       activeFileIndex.value = 0
+      console.log('已设置代码文件，文件数量:', codeFiles.value.length)
+    } else {
+      console.warn('警告：解析后没有找到代码文件')
     }
 
     // 更新预览URL并刷新预览
     nextTick(() => {
       if (appInfo.value?.codeGenType && appInfo.value?.id) {
+        console.log('代码生成完成，准备更新预览:', {
+          codeGenType: appInfo.value.codeGenType,
+          id: appInfo.value.id,
+          codeFilesCount: codeFiles.value.length
+        })
         updatePreviewUrl()
         // 延迟刷新预览，确保后端文件已保存
         setTimeout(() => {
+          console.log('开始刷新预览，当前预览URL:', previewUrl.value)
           refreshPreview()
-        }, 1500)
+        }, 2000)
+      } else {
+        console.warn('无法更新预览：缺少必要信息', {
+          codeGenType: appInfo.value?.codeGenType,
+          id: appInfo.value?.id,
+          appInfo: appInfo.value
+        })
       }
     })
+  } else {
+    console.warn('警告：代码生成完成但内容为空')
   }
 }
 
@@ -888,6 +926,11 @@ const generateCodeStream = async (userMessage: string) => {
           }
         },
         onComplete: () => {
+          console.log('=== SSE onComplete 回调触发 ===', {
+            accumulatedContentLength: accumulatedContent.length,
+            streaming: streaming.value,
+            sseConnectionExists: !!sseConnection
+          })
           handleStreamComplete(accumulatedContent)
           closeSSEConnection(sseConnection)
           sseConnection = null
@@ -917,21 +960,33 @@ const handleRetry = async (prompt?: string) => {
 
 const updatePreviewUrl = () => {
   if (appInfo.value?.codeGenType && appInfo.value?.id) {
-    const newUrl = `http://localhost:8102/api/static/${appInfo.value.codeGenType}_${appInfo.value.id}/`
-    // 如果URL变化，重置加载状态
+    const codeGenType = appInfo.value.codeGenType
+    const appIdValue = appInfo.value.id
+    const newUrl = `http://localhost:8102/api/static/${codeGenType}_${appIdValue}/`
+    
+    console.log('更新预览URL:', {
+      codeGenType,
+      appId: appIdValue,
+      newUrl,
+      oldUrl: previewUrl.value
+    })
+    
+    // 如果URL变化，重置加载状态并更新key
     if (previewUrl.value !== newUrl) {
       previewLoaded.value = false
       previewUrl.value = newUrl
-      console.log('更新预览URL:', newUrl)
+      previewKey.value++ // 更新key强制重新加载iframe
     } else if (!previewUrl.value) {
       previewUrl.value = newUrl
-      console.log('设置预览URL:', newUrl)
+      previewKey.value++ // 更新key强制重新加载iframe
     }
   } else {
     console.warn('无法更新预览URL：缺少必要信息', {
       codeGenType: appInfo.value?.codeGenType,
-      id: appInfo.value?.id
+      id: appInfo.value?.id,
+      appInfo: appInfo.value
     })
+    previewUrl.value = ''
   }
 }
 
@@ -940,9 +995,14 @@ const handlePreviewLoad = () => {
   console.log('预览页面加载完成:', previewUrl.value)
 }
 
-const handlePreviewError = () => {
+const handlePreviewError = (event?: Event) => {
   previewLoaded.value = false
-  console.error('预览加载失败:', previewUrl.value)
+  console.error('预览加载失败:', {
+    previewUrl: previewUrl.value,
+    event,
+    codeGenType: appInfo.value?.codeGenType,
+    appId: appInfo.value?.id
+  })
   message.warning('预览加载失败，请检查后端服务是否正常运行')
 }
 
@@ -955,22 +1015,25 @@ const refreshPreview = () => {
     updatePreviewUrl()
   }
   if (!previewUrl.value) {
-    console.warn('无法刷新预览：预览URL为空')
+    console.warn('无法刷新预览：预览URL为空', {
+      codeGenType: appInfo.value?.codeGenType,
+      appId: appInfo.value?.id
+    })
     return
   }
   previewLoaded.value = false
-  // 强制刷新iframe
-  nextTick(() => {
-    const iframe = document.querySelector('.preview-iframe') as HTMLIFrameElement
-    if (iframe) {
-      // 添加时间戳防止缓存
-      const separator = previewUrl.value.includes('?') ? '&' : '?'
-      const newUrl = previewUrl.value + separator + '_t=' + Date.now()
-      iframe.src = newUrl
-      console.log('刷新预览:', newUrl)
-    } else {
-      console.warn('无法刷新预览：找不到iframe元素')
-    }
+  // 强制刷新iframe - 通过更新key来重新创建iframe
+  previewKey.value++
+  const currentUrl = previewUrl.value
+  // 添加时间戳防止缓存
+  const separator = currentUrl.includes('?') ? '&' : '?'
+  const newUrl = currentUrl + separator + '_t=' + Date.now()
+  previewUrl.value = newUrl
+  console.log('刷新预览:', {
+    oldUrl: currentUrl,
+    newUrl,
+    previewKey: previewKey.value,
+    timestamp: Date.now()
   })
 }
 
@@ -1035,6 +1098,11 @@ watch(
   () => [appInfo.value?.codeGenType, appInfo.value?.id],
   () => {
     if (appInfo.value?.codeGenType && appInfo.value?.id && codeFiles.value.length > 0) {
+      console.log('appInfo变化，更新预览URL:', {
+        codeGenType: appInfo.value.codeGenType,
+        id: appInfo.value.id,
+        codeFilesCount: codeFiles.value.length
+      })
       updatePreviewUrl()
     }
   },
@@ -1069,7 +1137,7 @@ onUnmounted(() => {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 16px 24px;
+  padding: 12px 20px;
   border-bottom: 1px solid rgba(0, 0, 0, 0.06);
   background: #ffffff;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
@@ -1094,9 +1162,9 @@ onUnmounted(() => {
   overflow: hidden;
 }
 
-/* 左侧：步骤指南区域 - 45% */
+/* 左侧：步骤指南区域 - 40% (2:3比例) */
 .guide-panel {
-  flex: 0 0 45%;
+  flex: 0 0 40%;
   min-width: 0;
   min-height: 0;
   display: flex;
@@ -1112,7 +1180,7 @@ onUnmounted(() => {
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
-  padding: 24px;
+  padding: 16px 20px;
   scrollbar-width: thin;
   scrollbar-color: rgba(0, 0, 0, 0.2) transparent;
 }
@@ -1165,8 +1233,8 @@ onUnmounted(() => {
 
 .ai-guide {
   background: #fafbfc;
-  border-radius: 16px;
-  padding: 24px;
+  border-radius: 12px;
+  padding: 16px 20px;
   border: 1px solid rgba(0, 0, 0, 0.06);
 }
 
@@ -1276,15 +1344,15 @@ onUnmounted(() => {
 .input-container {
   flex-shrink: 0;
   min-height: 0;
-  padding: 16px 24px;
+  padding: 12px 20px;
   border-top: 1px solid rgba(0, 0, 0, 0.06);
   background: #ffffff;
   z-index: 10;
 }
 
-/* 右侧：代码编辑器区域 - 55% */
+/* 右侧：代码编辑器区域 - 60% (2:3比例) */
 .code-panel {
-  flex: 1;
+  flex: 0 0 60%;
   min-width: 0;
   min-height: 0;
   display: flex;
@@ -1298,7 +1366,7 @@ onUnmounted(() => {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 0 16px;
+  padding: 0 12px;
   background: #0f172a;
   border-bottom: 1px solid rgba(255, 255, 255, 0.1);
   flex-shrink: 0;
