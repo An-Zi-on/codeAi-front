@@ -77,6 +77,12 @@ export function createSSEConnection(
     options.onComplete?.()
   })
 
+  // 监听所有自定义事件，包括可能的完成事件
+  eventSource.addEventListener('complete', (event: any) => {
+    console.log('SSE complete 事件触发')
+    options.onComplete?.()
+  })
+
   // 处理错误
   eventSource.onerror = (error) => {
     console.error('SSE error:', error, 'readyState:', eventSource.readyState)
@@ -84,9 +90,20 @@ export function createSSEConnection(
     // 如果连接关闭，调用完成回调
     if (eventSource.readyState === EventSource.CLOSED) {
       console.log('SSE 连接已关闭，触发完成回调')
-      options.onComplete?.()
+      // 延迟一点确保所有消息都已处理
+      setTimeout(() => {
+        options.onComplete?.()
+      }, 100)
     }
   }
+  
+  // 监听连接关闭事件
+  eventSource.addEventListener('close', () => {
+    console.log('SSE close 事件触发')
+    setTimeout(() => {
+      options.onComplete?.()
+    }, 100)
+  })
 
   // 处理打开事件
   eventSource.onopen = () => {

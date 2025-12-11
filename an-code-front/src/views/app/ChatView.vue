@@ -17,7 +17,7 @@
       </div>
     </div>
 
-    <div class="chat-content">
+    <div class="chat-content" :class="{ resizing: isResizing }">
       <!-- 左侧：步骤指南 -->
       <div class="guide-panel">
         <div class="guide-container" ref="guideContainerRef">
@@ -86,8 +86,17 @@
         </div>
       </div>
 
+      <!-- 可拖拽的分隔条 -->
+      <div 
+        class="resizer" 
+        @mousedown="handleResizeStart"
+        @dblclick="handleResetResize"
+      >
+        <div class="resizer-handle"></div>
+      </div>
+
       <!-- 右侧：代码编辑器 -->
-      <div class="code-panel">
+      <div class="code-panel" :style="{ width: `${rightPanelWidth}%` }">
         <div class="code-header">
           <div class="code-tabs">
             <div
@@ -98,14 +107,22 @@
                 generating: file.isGenerating,
                 complete: file.isComplete && !file.isGenerating
               }]"
-              @click="activeFileIndex = idx"
+              @click="handleFileSwitch(idx)"
             >
               <span class="tab-icon">📄</span>
               <span class="tab-name">{{ file.name }}</span>
-              <span v-if="file.isGenerating" class="tab-generating-indicator">
+              <!-- 只在文件标签上显示状态 -->
+              <span v-if="file.isGenerating" class="tab-generating-indicator" title="正在生成">
                 <a-spin size="small" style="margin-right: 4px;" />
+                <span style="font-size: 11px; color: #52c41a;">生成中</span>
               </span>
-              <span v-if="file.isComplete && !file.isGenerating" class="tab-complete-indicator">✓</span>
+              <span v-else-if="file.isComplete" class="tab-complete-indicator" title="已完成">
+                <span style="color: #52c41a; font-weight: bold; margin-right: 2px;">✓</span>
+                <span style="font-size: 11px; color: #52c41a;">已完成</span>
+              </span>
+              <span v-else class="tab-pending-indicator" title="等待生成">
+                <span style="font-size: 11px; color: rgba(255, 255, 255, 0.5);">等待中</span>
+              </span>
               <span v-if="codeFiles.length > 1" class="tab-close" @click.stop="removeFile(idx)">×</span>
             </div>
           </div>
@@ -130,16 +147,17 @@
             <div v-else class="code-editor">
               <div class="code-editor-header">
                 <span class="code-lang">{{ currentFile?.language || 'text' }}</span>
-                <span v-if="streaming" class="code-generating-indicator">
+                <!-- 只在当前文件正在生成时显示生成指示器 -->
+                <span v-if="currentFile?.isGenerating" class="code-generating-indicator">
                   <a-spin size="small" style="margin-right: 8px;" />
                   正在生成...
                 </span>
-                <span v-else-if="currentFile?.isGenerating" class="code-generating-indicator">
-                  <a-spin size="small" style="margin-right: 8px;" />
-                  生成中...
+                <span v-else-if="currentFile?.isComplete" class="code-complete-indicator">
+                  <span style="color: #52c41a; margin-right: 4px;">✓</span>
+                  已完成
                 </span>
               </div>
-              <pre class="code-block"><code v-html="highlightCode(currentFile?.content || '', currentFile?.language || 'text')"></code></pre>
+              <pre class="code-block"><code v-html="highlightedCode"></code></pre>
             </div>
           </div>
           <!-- 预览视图 -->
@@ -280,6 +298,15 @@ const activeFileIndex = ref(0)
 
 const currentFile = computed(() => codeFiles.value[activeFileIndex.value] || null)
 
+// 高亮代码 - 使用 computed 优化性能，避免在模板中直接调用
+const highlightedCode = computed(() => {
+  const file = currentFile.value
+  if (!file || !file.content) return ''
+  
+  // 使用 highlightCode 函数进行高亮
+  return highlightCode(file.content, file.language || 'text')
+})
+
 // 预览
 const showPreview = ref(false)
 const previewUrl = ref('')
@@ -287,6 +314,11 @@ const previewLoaded = ref(false)
 const previewEnabled = ref(true)
 const showCodeView = ref(true) // 控制显示代码还是预览
 const previewKey = ref(0) // 用于强制刷新iframe
+
+// 左右面板宽度控制
+const leftPanelWidth = ref(40) // 左侧面板宽度百分比
+const rightPanelWidth = ref(60) // 右侧面板宽度百分比
+const isResizing = ref(false) // 是否正在调整大小
 
 const deploying = ref(false)
 let sseConnection: EventSource | null = null
@@ -504,31 +536,74 @@ const getLanguageFromFileName = (fileName: string): string => {
   return map[ext || ''] || 'text'
 }
 
-// 代码高亮
+// 代码高亮缓存，避免重复高亮相同内容
+const highlightCache = new Map<string, string>()
+
+// 代码高亮 - 优化性能，避免大文件导致卡死
 const highlightCode = (code: string, language: string): string => {
   if (!code || code.trim() === '') return escapeHtml(code || '')
+  
+  // 对于超大文件，直接返回转义后的文本，不进行高亮
+  if (code.length > 50000) {
+    console.warn('代码文件过大，跳过语法高亮以避免性能问题')
+    return escapeHtml(code)
+  }
+  
+  // 使用缓存避免重复高亮（仅对小于10KB的文件使用缓存）
+  let cacheKey: string | null = null
+  if (code.length < 10000) {
+    cacheKey = `${language}:${code.substring(0, 100)}:${code.length}`
+    if (highlightCache.has(cacheKey)) {
+      return highlightCache.get(cacheKey)!
+    }
+  }
   
   // 如果语言是 'text' 或空，尝试自动检测
   const langToUse = language && language !== 'text' ? language : undefined
   
+  let result = ''
+  
   if (hljs && langToUse) {
     try {
-      return hljs.highlight(code, { language: langToUse }).value
+      result = hljs.highlight(code, { language: langToUse }).value
     } catch (err) {
       // 如果指定语言失败，尝试自动检测
       console.warn(`Highlight failed for language "${langToUse}", trying auto-detect:`, err)
+      if (hljs) {
+        try {
+          result = hljs.highlightAuto(code).value
+        } catch (autoErr) {
+          console.error('Auto highlight error:', autoErr)
+          result = escapeHtml(code)
+        }
+      } else {
+        result = escapeHtml(code)
+      }
     }
-  }
-  
-  if (hljs) {
+  } else if (hljs) {
     try {
-      return hljs.highlightAuto(code).value
+      result = hljs.highlightAuto(code).value
     } catch (err) {
       console.error('Auto highlight error:', err)
+      result = escapeHtml(code)
     }
+  } else {
+    result = escapeHtml(code)
   }
   
-  return escapeHtml(code)
+  // 缓存结果（限制缓存大小，仅缓存小文件）
+  if (cacheKey) {
+    if (highlightCache.size > 50) {
+      // 删除最旧的缓存项
+      const firstKey = highlightCache.keys().next().value
+      if (firstKey) {
+        highlightCache.delete(firstKey)
+      }
+    }
+    highlightCache.set(cacheKey, result)
+  }
+  
+  return result
 }
 
 const escapeHtml = (unsafe: string) => {
@@ -540,12 +615,32 @@ const escapeHtml = (unsafe: string) => {
     .replace(/'/g, '&#039;')
 }
 
+// 文件切换处理 - 优化性能，避免卡死
+// 允许在代码生成时切换已经完成的文件
+const handleFileSwitch = (index: number) => {
+  if (index === activeFileIndex.value) return // 如果点击的是当前文件，不处理
+  
+  const targetFile = codeFiles.value[index]
+  if (!targetFile) return
+  
+  // 允许切换已完成的文件，即使正在生成其他文件
+  // 如果目标文件正在生成，也可以切换（让用户看到实时生成过程）
+  // 使用 nextTick 延迟切换，避免在渲染过程中切换
+  nextTick(() => {
+    activeFileIndex.value = index
+    // 清空高亮缓存，强制重新高亮新文件
+    highlightCache.clear()
+  })
+}
+
 const removeFile = (index: number) => {
   if (codeFiles.value.length > 1) {
     codeFiles.value.splice(index, 1)
     if (activeFileIndex.value >= codeFiles.value.length) {
       activeFileIndex.value = codeFiles.value.length - 1
     }
+    // 清空缓存
+    highlightCache.clear()
   }
 }
 
@@ -777,30 +872,59 @@ const handleStreamComplete = (content: string) => {
       console.warn('警告：解析后没有找到代码文件')
     }
 
-    // 更新预览URL并刷新预览
+    // 更新预览URL并刷新预览 - 无论是否有代码文件都尝试更新
     nextTick(() => {
       if (appInfo.value?.codeGenType && appInfo.value?.id) {
         console.log('代码生成完成，准备更新预览:', {
           codeGenType: appInfo.value.codeGenType,
           id: appInfo.value.id,
-          codeFilesCount: codeFiles.value.length
+          codeFilesCount: codeFiles.value.length,
+          hasContent: !!content
         })
+        
+        // 强制更新预览URL
         updatePreviewUrl()
+        
         // 延迟刷新预览，确保后端文件已保存
+        // 增加延迟时间，确保后端文件系统已完全写入
         setTimeout(() => {
-          console.log('开始刷新预览，当前预览URL:', previewUrl.value)
+          console.log('开始刷新预览，当前状态:', {
+            previewUrl: previewUrl.value,
+            previewEnabled: previewEnabled.value,
+            showCodeView: showCodeView.value
+          })
           refreshPreview()
-        }, 2000)
+        }, 3000) // 增加到3秒，确保后端文件已保存
       } else {
         console.warn('无法更新预览：缺少必要信息', {
           codeGenType: appInfo.value?.codeGenType,
           id: appInfo.value?.id,
           appInfo: appInfo.value
         })
+        // 即使缺少信息，也尝试从已有信息更新
+        if (appInfo.value?.id) {
+          console.log('尝试使用已有ID更新预览URL')
+          const codeGenType = appInfo.value.codeGenType || 'multi_file' // 默认值
+          const newUrl = `http://localhost:8102/api/static/code_output/${codeGenType}_${appInfo.value.id}/`
+          previewUrl.value = newUrl
+          previewKey.value++
+          setTimeout(() => {
+            refreshPreview()
+          }, 3000)
+        }
       }
     })
   } else {
-    console.warn('警告：代码生成完成但内容为空')
+    console.warn('警告：代码生成完成但内容为空，尝试更新预览')
+    // 即使内容为空，也尝试更新预览（后端可能已经生成了文件）
+    nextTick(() => {
+      if (appInfo.value?.codeGenType && appInfo.value?.id) {
+        updatePreviewUrl()
+        setTimeout(() => {
+          refreshPreview()
+        }, 3000)
+      }
+    })
   }
 }
 
@@ -929,11 +1053,27 @@ const generateCodeStream = async (userMessage: string) => {
           console.log('=== SSE onComplete 回调触发 ===', {
             accumulatedContentLength: accumulatedContent.length,
             streaming: streaming.value,
-            sseConnectionExists: !!sseConnection
+            sseConnectionExists: !!sseConnection,
+            hasAppInfo: !!(appInfo.value?.codeGenType && appInfo.value?.id)
           })
-          handleStreamComplete(accumulatedContent)
+          // 确保在完成时处理内容，即使内容可能为空（后端可能已经生成文件）
+          if (accumulatedContent || codeFiles.value.length > 0) {
+            handleStreamComplete(accumulatedContent || '')
+          } else {
+            // 即使没有内容，也尝试更新预览（后端可能已经生成了文件）
+            console.log('SSE完成但无内容，尝试更新预览')
+            nextTick(() => {
+              if (appInfo.value?.codeGenType && appInfo.value?.id) {
+                updatePreviewUrl()
+                setTimeout(() => {
+                  refreshPreview()
+                }, 3000)
+              }
+            })
+          }
           closeSSEConnection(sseConnection)
           sseConnection = null
+          streaming.value = false
         },
       },
     )
@@ -962,13 +1102,22 @@ const updatePreviewUrl = () => {
   if (appInfo.value?.codeGenType && appInfo.value?.id) {
     const codeGenType = appInfo.value.codeGenType
     const appIdValue = appInfo.value.id
-    const newUrl = `http://localhost:8102/api/static/${codeGenType}_${appIdValue}/`
+    // 后端路径：codeAi/tmp/code_output/{codeGenType}_{appId}/
+    // 根据后端实际配置，尝试不同的路径格式
+    // 常见配置：
+    // 1. /api/static/code_output/{codeGenType}_{appId}/ -> codeAi/tmp/code_output/{codeGenType}_{appId}/
+    // 2. /code_output/{codeGenType}_{appId}/ -> codeAi/tmp/code_output/{codeGenType}_{appId}/
+    // 3. /static/code_output/{codeGenType}_{appId}/ -> codeAi/tmp/code_output/{codeGenType}_{appId}/
+    // 如果还是404，请检查后端WebMvcConfigurer或ResourceHandler配置
+    const newUrl = `http://localhost:8102/api/static/code_output/${codeGenType}_${appIdValue}/`
     
     console.log('更新预览URL:', {
       codeGenType,
       appId: appIdValue,
       newUrl,
-      oldUrl: previewUrl.value
+      oldUrl: previewUrl.value,
+      '后端文件路径': `codeAi/tmp/code_output/${codeGenType}_${appIdValue}/`,
+      '提示': '如果404，请检查后端静态资源映射配置，确认 /api/static/** 是否正确映射到 codeAi/tmp/code_output/**'
     })
     
     // 如果URL变化，重置加载状态并更新key
@@ -1019,12 +1168,25 @@ const refreshPreview = () => {
       codeGenType: appInfo.value?.codeGenType,
       appId: appInfo.value?.id
     })
-    return
+    // 尝试再次更新URL
+    if (appInfo.value?.id) {
+      const codeGenType = appInfo.value.codeGenType || 'multi_file'
+      const fallbackUrl = `http://localhost:8102/api/static/code_output/${codeGenType}_${appInfo.value.id}/`
+      console.log('使用备用URL:', fallbackUrl)
+      previewUrl.value = fallbackUrl
+      previewKey.value++
+    } else {
+      return
+    }
   }
   previewLoaded.value = false
   // 强制刷新iframe - 通过更新key来重新创建iframe
   previewKey.value++
-  const currentUrl = previewUrl.value
+  const currentUrl = previewUrl.value?.split('?')[0] || previewUrl.value // 移除可能的时间戳
+  if (!currentUrl) {
+    console.error('无法刷新预览：URL无效')
+    return
+  }
   // 添加时间戳防止缓存
   const separator = currentUrl.includes('?') ? '&' : '?'
   const newUrl = currentUrl + separator + '_t=' + Date.now()
@@ -1033,7 +1195,8 @@ const refreshPreview = () => {
     oldUrl: currentUrl,
     newUrl,
     previewKey: previewKey.value,
-    timestamp: Date.now()
+    timestamp: Date.now(),
+    previewEnabled: previewEnabled.value
   })
 }
 
@@ -1108,7 +1271,60 @@ watch(
   },
 )
 
+// 拖拽调整左右面板宽度
+const handleResizeStart = (e: MouseEvent) => {
+  isResizing.value = true
+  const startX = e.clientX
+  const startLeftWidth = leftPanelWidth.value
+  const chatContent = document.querySelector('.chat-content') as HTMLElement
+  if (!chatContent) return
+
+  const handleMouseMove = (moveEvent: MouseEvent) => {
+    const deltaX = moveEvent.clientX - startX
+    const chatContentWidth = chatContent.offsetWidth
+    const deltaPercent = (deltaX / chatContentWidth) * 100
+    
+    let newLeftWidth = startLeftWidth + deltaPercent
+    // 限制最小和最大宽度（20% - 80%）
+    newLeftWidth = Math.max(20, Math.min(80, newLeftWidth))
+    
+    leftPanelWidth.value = newLeftWidth
+    rightPanelWidth.value = 100 - newLeftWidth
+  }
+
+  const handleMouseUp = () => {
+    isResizing.value = false
+    document.removeEventListener('mousemove', handleMouseMove)
+    document.removeEventListener('mouseup', handleMouseUp)
+    // 保存到 localStorage
+    localStorage.setItem('chatPanelWidth', leftPanelWidth.value.toString())
+  }
+
+  document.addEventListener('mousemove', handleMouseMove)
+  document.addEventListener('mouseup', handleMouseUp)
+  
+  // 防止文本选择
+  e.preventDefault()
+}
+
+// 双击重置为默认比例
+const handleResetResize = () => {
+  leftPanelWidth.value = 40
+  rightPanelWidth.value = 60
+  localStorage.setItem('chatPanelWidth', '40')
+}
+
 onMounted(() => {
+  // 从 localStorage 恢复面板宽度
+  const savedWidth = localStorage.getItem('chatPanelWidth')
+  if (savedWidth) {
+    const width = parseFloat(savedWidth)
+    if (!isNaN(width) && width >= 20 && width <= 80) {
+      leftPanelWidth.value = width
+      rightPanelWidth.value = 100 - width
+    }
+  }
+  
   loadAppInfo()
 })
 
@@ -1162,16 +1378,16 @@ onUnmounted(() => {
   overflow: hidden;
 }
 
-/* 左侧：步骤指南区域 - 40% (2:3比例) */
+/* 左侧：步骤指南区域 - 可动态调整 */
 .guide-panel {
-  flex: 0 0 40%;
+  width: v-bind(leftPanelWidth + '%');
   min-width: 0;
   min-height: 0;
   display: flex;
   flex-direction: column;
   background: #ffffff;
-  border-right: 1px solid rgba(0, 0, 0, 0.06);
   overflow: hidden;
+  transition: width 0.1s ease;
 }
 
 /* 聊天消息容器：可独立滚动 */
@@ -1350,15 +1566,62 @@ onUnmounted(() => {
   z-index: 10;
 }
 
-/* 右侧：代码编辑器区域 - 60% (2:3比例) */
+/* 可拖拽的分隔条 */
+.resizer {
+  width: 4px;
+  background: rgba(0, 0, 0, 0.06);
+  cursor: col-resize;
+  position: relative;
+  flex-shrink: 0;
+  transition: background 0.2s ease;
+  user-select: none;
+}
+
+.resizer:hover {
+  background: rgba(24, 144, 255, 0.3);
+}
+
+.resizer:active {
+  background: rgba(24, 144, 255, 0.5);
+}
+
+.resizer-handle {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 2px;
+  height: 100%;
+  background: rgba(24, 144, 255, 0.4);
+  transition: all 0.2s ease;
+}
+
+.resizer:hover .resizer-handle {
+  width: 3px;
+  background: rgba(24, 144, 255, 0.6);
+}
+
+.resizer:active .resizer-handle {
+  width: 4px;
+  background: rgba(24, 144, 255, 0.8);
+}
+
+/* 正在调整大小时禁用过渡 */
+.chat-content.resizing .guide-panel,
+.chat-content.resizing .code-panel {
+  transition: none;
+}
+
+/* 右侧：代码编辑器区域 - 可动态调整 */
 .code-panel {
-  flex: 0 0 60%;
+  width: v-bind(rightPanelWidth + '%');
   min-width: 0;
   min-height: 0;
   display: flex;
   flex-direction: column;
   background: #1e293b;
   overflow: hidden;
+  transition: width 0.1s ease;
 }
 
 /* 代码头部：固定 */
@@ -1437,6 +1700,12 @@ onUnmounted(() => {
   margin-left: 4px;
   color: #52c41a;
   font-size: 12px;
+}
+
+.tab-pending-indicator {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 4px;
 }
 
 .tab-name {
@@ -1545,6 +1814,14 @@ onUnmounted(() => {
   margin-left: 12px;
   font-size: 12px;
   color: rgba(255, 255, 255, 0.5);
+}
+
+.code-complete-indicator {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 12px;
+  font-size: 12px;
+  color: #52c41a;
 }
 
 /* 代码块：独立滚动 */
@@ -1716,14 +1993,18 @@ onUnmounted(() => {
   }
 
   .guide-panel {
-    flex: 0 0 50%;
+    width: 100% !important;
     min-height: 0;
     border-right: none;
     border-bottom: 1px solid rgba(0, 0, 0, 0.06);
   }
 
+  .resizer {
+    display: none;
+  }
+
   .code-panel {
-    flex: 0 0 50%;
+    width: 100% !important;
     min-height: 0;
   }
 
