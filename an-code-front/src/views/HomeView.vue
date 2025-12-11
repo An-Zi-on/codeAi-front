@@ -146,7 +146,6 @@ import { message } from 'ant-design-vue'
 import { CloudUploadOutlined, SendOutlined } from '@ant-design/icons-vue'
 import { useRouter } from 'vue-router'
 import { createApp, pageMyApps, pageFeaturedApps, deleteMyApp } from '../api/appController'
-import { createSSEConnection, closeSSEConnection } from '@/utils/sse'
 import { convertIdToString } from '@/utils/idConverter'
 import type { AppVO } from '@/api/typings'
 
@@ -282,44 +281,10 @@ const handleCreateApp = async () => {
 
     if (response.data?.code === 0 && response.data?.data) {
       const appId = response.data.data
-      
-      // 创建应用后立即调用生成代码接口（SSE流式接口）
-      try {
-        const url = `http://localhost:8102/api/app/chat/gen/code`
-        const sseConnection = createSSEConnection(
-          url,
-          {
-            appId: convertIdToString(appId) as any,
-            message: initPrompt,
-          },
-          {
-            onMessage: () => {
-              // 不处理消息，因为用户会跳转到ChatView页面查看结果
-            },
-            onError: (error) => {
-              console.error('生成代码失败:', error)
-            },
-            onComplete: () => {
-              // 代码生成完成，关闭连接
-              closeSSEConnection(sseConnection)
-            },
-          }
-        )
-        
-        // 延迟关闭连接，给后端一些时间开始处理
-        setTimeout(() => {
-          closeSSEConnection(sseConnection)
-        }, 1000)
-        
-        message.success('应用创建成功，代码生成中...')
-      } catch (genError) {
-        console.error('触发代码生成失败:', genError)
-        message.success('应用创建成功')
-      }
-      
+      message.success('应用创建成功')
       promptText.value = ''
-      // 跳转到对话页面，添加 view=1 参数避免自动发送消息
-      router.push(`/app/chat/${appId}?view=1`)
+      // 跳转到对话页面，代码生成将在ChatView页面自动触发
+      router.push(`/app/chat/${appId}`)
     } else {
       message.error(response.data?.message || '创建应用失败')
     }
@@ -636,6 +601,11 @@ onUnmounted(() => {
   color: #0f1d7a;
 }
 
+.gen-type-select :deep(.ant-select-focused .ant-select-selector) {
+  border-color: rgba(38, 103, 255, 0.8);
+  box-shadow: 0 0 0 2px rgba(38, 103, 255, 0.1);
+}
+
 .ghost-btn {
   border-radius: 999px;
   border: 1px solid rgba(38, 103, 255, 0.5);
@@ -778,17 +748,26 @@ onUnmounted(() => {
   border-radius: 20px;
   box-shadow: 0 15px 30px rgba(15, 23, 42, 0.08);
   border: 1px solid rgba(15, 23, 42, 0.06);
-  transition: transform 0.2s, box-shadow 0.2s;
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
   display: flex;
   flex-direction: column;
   gap: 16px;
   cursor: pointer;
   overflow: hidden;
+  height: 100%;
 }
 
 .case-card:hover {
   transform: translateY(-4px);
   box-shadow: 0 20px 40px rgba(15, 23, 42, 0.15);
+}
+
+.case-card:active {
+  transform: translateY(-2px);
+}
+
+.case-card:active {
+  transform: translateY(-2px);
 }
 
 .case-thumb {
@@ -855,11 +834,31 @@ onUnmounted(() => {
 
   .input-actions {
     flex-direction: column;
+    gap: 8px;
+  }
+
+  .gen-type-select {
+    width: 100%;
+    min-width: 100%;
   }
 
   .works-grid,
   .cases-grid {
     grid-template-columns: 1fr;
+  }
+
+  .hero-window {
+    padding: 20px 20px 12px;
+  }
+
+  .hero-textarea {
+    padding: 16px 50px 16px 20px;
+    font-size: 14px;
+  }
+
+  .hero-placeholder {
+    padding: 16px 50px 16px 20px;
+    font-size: 14px;
   }
 }
 </style>

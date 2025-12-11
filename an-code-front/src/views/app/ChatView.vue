@@ -90,54 +90,83 @@
             <div
               v-for="(file, idx) in codeFiles"
               :key="idx"
-              :class="['code-tab', { active: activeFileIndex === idx }]"
+              :class="['code-tab', { 
+                active: activeFileIndex === idx,
+                generating: file.isGenerating,
+                complete: file.isComplete && !file.isGenerating
+              }]"
               @click="activeFileIndex = idx"
             >
               <span class="tab-icon">📄</span>
               <span class="tab-name">{{ file.name }}</span>
+              <span v-if="file.isGenerating" class="tab-generating-indicator">
+                <a-spin size="small" style="margin-right: 4px;" />
+              </span>
+              <span v-if="file.isComplete && !file.isGenerating" class="tab-complete-indicator">✓</span>
               <span v-if="codeFiles.length > 1" class="tab-close" @click.stop="removeFile(idx)">×</span>
             </div>
           </div>
           <div class="code-actions">
-            <a-button type="link" size="small" @click="handleRefreshPreview">
+            <a-button type="link" size="small" @click="showCodeView = !showCodeView">
+              {{ showCodeView ? '查看预览' : '查看代码' }}
+            </a-button>
+            <a-button v-if="!showCodeView" type="link" size="small" @click="handleRefreshPreview">
               <template #icon><ReloadOutlined /></template>
               刷新预览
             </a-button>
           </div>
         </div>
-        <div class="code-content">
-          <div v-if="codeFiles.length === 0 && !streaming" class="code-empty">
-            <a-empty description="代码生成后将显示在这里" />
-          </div>
-          <div v-else-if="codeFiles.length === 0 && streaming" class="code-empty">
-            <a-spin size="large" />
-            <p style="margin-top: 16px; color: rgba(255, 255, 255, 0.6);">正在生成代码...</p>
-          </div>
-          <div v-else class="code-editor">
-            <div class="code-editor-header">
-              <span class="code-lang">{{ currentFile?.language || 'text' }}</span>
-              <span v-if="streaming" class="code-generating-indicator">
-                <a-spin size="small" style="margin-right: 8px;" />
-                正在生成...
-              </span>
+        <!-- 代码和预览重叠显示 -->
+        <div class="code-preview-container">
+          <!-- 代码视图 -->
+          <div v-show="showCodeView" class="code-content">
+            <div v-if="codeFiles.length === 0 && !streaming" class="code-empty">
+              <a-empty description="代码生成后将显示在这里" />
             </div>
-            <pre class="code-block"><code v-html="highlightCode(currentFile?.content || '', currentFile?.language || '')"></code></pre>
+            <div v-else-if="codeFiles.length === 0 && streaming" class="code-empty">
+              <a-spin size="large" />
+              <p style="margin-top: 16px; color: rgba(255, 255, 255, 0.6);">正在生成代码...</p>
+            </div>
+            <div v-else class="code-editor">
+              <div class="code-editor-header">
+                <span class="code-lang">{{ currentFile?.language || 'text' }}</span>
+                <span v-if="streaming" class="code-generating-indicator">
+                  <a-spin size="small" style="margin-right: 8px;" />
+                  正在生成...
+                </span>
+                <span v-else-if="currentFile?.isGenerating" class="code-generating-indicator">
+                  <a-spin size="small" style="margin-right: 8px;" />
+                  生成中...
+                </span>
+              </div>
+              <pre class="code-block"><code v-html="highlightCode(currentFile?.content || '', currentFile?.language || 'text')"></code></pre>
+            </div>
           </div>
-        </div>
-        <div class="preview-section">
-          <div class="preview-header">
-            <h4>网站预览</h4>
-            <a-button type="link" size="small" @click="togglePreview">
-              {{ previewEnabled ? '隐藏' : '显示' }}
-            </a-button>
-          </div>
-          <div v-if="previewEnabled" class="preview-content">
-            <iframe
-              :src="previewUrl"
-              frameborder="0"
-              class="preview-iframe"
-              @load="handlePreviewLoad"
-            ></iframe>
+          <!-- 预览视图 -->
+          <div v-show="!showCodeView" class="preview-section">
+            <div class="preview-header">
+              <h4>网站预览</h4>
+              <div v-if="!previewLoaded && previewUrl" class="preview-loading">
+                <a-spin size="small" />
+                <span style="margin-left: 8px; font-size: 12px; color: rgba(0, 0, 0, 0.45);">加载中...</span>
+              </div>
+            </div>
+            <div class="preview-content">
+              <iframe
+                v-if="previewEnabled && previewUrl"
+                :src="previewUrl"
+                frameborder="0"
+                class="preview-iframe"
+                @load="handlePreviewLoad"
+                @error="() => { previewLoaded.value = false; console.error('预览加载失败:', previewUrl) }"
+              ></iframe>
+              <div v-else-if="!previewEnabled" class="preview-empty">
+                <a-empty description="预览已关闭" />
+              </div>
+              <div v-else-if="!previewUrl" class="preview-empty">
+                <a-empty description="代码生成后将显示预览" />
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -236,6 +265,8 @@ interface CodeFile {
   name: string
   content: string
   language: string
+  isComplete?: boolean // 标记文件是否生成完成
+  isGenerating?: boolean // 标记文件是否正在生成
 }
 
 const codeFiles = ref<CodeFile[]>([])
@@ -248,6 +279,7 @@ const showPreview = ref(false)
 const previewUrl = ref('')
 const previewLoaded = ref(false)
 const previewEnabled = ref(true)
+const showCodeView = ref(true) // 控制显示代码还是预览
 
 const deploying = ref(false)
 let sseConnection: EventSource | null = null
@@ -330,6 +362,8 @@ const renderGuideSteps = (content: string): string => {
 const parseCodeFiles = (content: string) => {
   const files: CodeFile[] = []
   const fileMap = new Map<string, CodeFile>()
+  const completedFiles = new Set<string>() // 已完成的文件
+  const generatingFiles = new Set<string>() // 正在生成的文件
   
   // 匹配完整的代码块：```lang filename\ncode```
   const codeBlockRegex = /```(\w+)?\s*([^\n]+)?\n([\s\S]*?)```/g
@@ -344,39 +378,65 @@ const parseCodeFiles = (content: string) => {
       name: fileName,
       content: code,
       language: language,
+      isComplete: true,
+      isGenerating: false,
     })
+    completedFiles.add(fileName)
   }
   
   // 处理未完成的代码块（实时显示）
   // 查找所有 ``` 标记，包括未闭合的
-  const allCodeBlocks = content.match(/```[\s\S]*?$/g)
-  if (allCodeBlocks) {
-    allCodeBlocks.forEach((block) => {
-      // 提取语言和文件名
-      const headerMatch = block.match(/^```(\w+)?\s*([^\n]+)?\n/)
-      if (headerMatch) {
-        const language = headerMatch[1] || 'text'
-        const fileName = headerMatch[2]?.trim() || `file.${getDefaultExtension(language)}`
-        
-        // 提取代码内容（可能不完整）
-        const codeMatch = block.match(/^```[\w\s]*\n([\s\S]*?)(?:```|$)/)
-        if (codeMatch) {
-          const code = codeMatch[1].trim()
-          // 如果这个文件还没有完整版本，或者当前内容更长，则更新
-          if (!fileMap.has(fileName) || code.length > (fileMap.get(fileName)?.content.length || 0)) {
-            fileMap.set(fileName, {
-              name: fileName,
-              content: code,
-              language: language,
-            })
-          }
-        }
+  // 使用更精确的正则表达式匹配未完成的代码块
+  const unclosedCodeBlockRegex = /```(\w+)?\s*([^\n]+)?\n([\s\S]*?)(?=```|$)/g
+  let unclosedMatch
+  
+  while ((unclosedMatch = unclosedCodeBlockRegex.exec(content)) !== null) {
+    const language = unclosedMatch[1] || 'text'
+    const fileName = unclosedMatch[2]?.trim() || `file.${getDefaultExtension(language)}`
+    const code = unclosedMatch[3] || ''
+    
+    // 检查这个代码块是否已经完成（在完整代码块匹配中）
+    const isComplete = completedFiles.has(fileName)
+    
+    // 如果这个文件还没有完整版本，或者当前内容更长，则更新
+    if (!fileMap.has(fileName) || code.length > (fileMap.get(fileName)?.content.length || 0)) {
+      // 检查是否是未闭合的（在内容末尾查找是否有结束的```）
+      const blockEnd = unclosedMatch.index + unclosedMatch[0].length
+      const remainingContent = content.substring(blockEnd)
+      const hasClosingBackticks = remainingContent.trim().startsWith('```')
+      const isUnclosed = !hasClosingBackticks && !isComplete
+      
+      const isGenerating = isUnclosed || (!isComplete && code.length > 0)
+      
+      fileMap.set(fileName, {
+        name: fileName,
+        content: code.trim(),
+        language: language,
+        isComplete: isComplete,
+        isGenerating: isGenerating,
+      })
+      
+      if (isGenerating) {
+        generatingFiles.add(fileName)
       }
-    })
+    }
   }
   
-  // 将 Map 转换为数组
-  files.push(...Array.from(fileMap.values()))
+  // 将 Map 转换为数组，按生成顺序排序
+  const fileArray = Array.from(fileMap.values())
+  
+  // 排序：正在生成的在前，已完成的在后，按出现顺序
+  fileArray.sort((a, b) => {
+    // 正在生成的优先
+    if (a.isGenerating && !b.isGenerating) return -1
+    if (!a.isGenerating && b.isGenerating) return 1
+    // 未完成的优先
+    if (!a.isComplete && b.isComplete) return -1
+    if (a.isComplete && !b.isComplete) return 1
+    return 0
+  })
+  
+  files.push(...fileArray)
   
   // 如果没有找到代码块，尝试从STEP中提取文件名
   if (files.length === 0) {
@@ -394,6 +454,8 @@ const parseCodeFiles = (content: string) => {
           name,
           content: '// 代码生成中...',
           language: getLanguageFromFileName(name),
+          isComplete: false,
+          isGenerating: true,
         })
       }
     })
@@ -431,21 +493,28 @@ const getLanguageFromFileName = (fileName: string): string => {
 
 // 代码高亮
 const highlightCode = (code: string, language: string): string => {
-  if (!code) return ''
-  if (hljs && language) {
+  if (!code || code.trim() === '') return escapeHtml(code || '')
+  
+  // 如果语言是 'text' 或空，尝试自动检测
+  const langToUse = language && language !== 'text' ? language : undefined
+  
+  if (hljs && langToUse) {
     try {
-      return hljs.highlight(code, { language }).value
+      return hljs.highlight(code, { language: langToUse }).value
     } catch (err) {
-      console.error('Highlight error:', err)
+      // 如果指定语言失败，尝试自动检测
+      console.warn(`Highlight failed for language "${langToUse}", trying auto-detect:`, err)
     }
   }
+  
   if (hljs) {
     try {
       return hljs.highlightAuto(code).value
     } catch (err) {
-      console.error('Highlight error:', err)
+      console.error('Auto highlight error:', err)
     }
   }
+  
   return escapeHtml(code)
 }
 
@@ -508,6 +577,12 @@ const loadChatHistory = async () => {
       const lastAiMessage = messages.value.filter(m => m.role === 'ai').pop()
       if (lastAiMessage) {
         codeFiles.value = parseCodeFiles(lastAiMessage.content)
+        // 如果有代码文件，更新预览URL
+        if (codeFiles.value.length > 0) {
+          nextTick(() => {
+            updatePreviewUrl()
+          })
+        }
       }
     }
   } catch (error) {
@@ -533,13 +608,14 @@ const loadAppInfo = async () => {
       appInfo.value = response.data.data
       await loadChatHistory()
       
-      // 如果不是查看模式，且有初始提示词，且没有历史消息，自动调用生成代码接口
-      if (!isViewMode.value && messages.value.length === 0 && appInfo.value.initPrompt) {
+      // 如果不是查看模式，且有初始提示词，且没有历史消息，且未触发过自动生成，自动调用生成代码接口
+      if (!isViewMode.value && messages.value.length === 0 && appInfo.value.initPrompt && !autoGenTriggered.value) {
+        autoGenTriggered.value = true
         nextTick(async () => {
           setTimeout(async () => {
             // 直接调用生成代码接口，不通过输入框
             const initPrompt = appInfo.value!.initPrompt || ''
-            if (initPrompt) {
+            if (initPrompt && !streaming.value) {
               // 添加用户消息到消息列表
               messages.value.push({
                 role: 'user',
@@ -566,8 +642,8 @@ const loadAppInfo = async () => {
               })
               
               scrollToBottom()
-          // 调用生成代码接口
-          await generateCodeStream(initPrompt)
+              // 调用生成代码接口
+              await generateCodeStream(initPrompt)
             }
           }, 500)
         })
@@ -658,16 +734,14 @@ const handleStreamComplete = (content: string) => {
       activeFileIndex.value = 0
     }
 
+    // 更新预览URL并刷新预览
     nextTick(() => {
       if (appInfo.value?.codeGenType && appInfo.value?.id) {
-        showPreview.value = true
         updatePreviewUrl()
+        // 延迟刷新预览，确保后端文件已保存
         setTimeout(() => {
-          const iframe = document.querySelector('.preview-iframe') as HTMLIFrameElement
-          if (iframe) {
-            iframe.src = iframe.src
-          }
-        }, 1000)
+          refreshPreview()
+        }, 1500)
       }
     })
   }
@@ -708,11 +782,30 @@ const generateCodeStream = async (userMessage: string) => {
               
               // 实时解析代码文件
               const newFiles = parseCodeFiles(accumulatedContent)
+              const oldFilesCount = codeFiles.value.length
               codeFiles.value = newFiles
               
-              // 如果有新文件且当前没有选中文件，自动切换到第一个文件
-              if (newFiles.length > 0 && activeFileIndex.value >= newFiles.length) {
-                activeFileIndex.value = 0
+              // 智能切换文件：优先显示正在生成的文件
+              if (newFiles.length > 0) {
+                // 如果有新文件出现，切换到第一个新文件
+                if (newFiles.length > oldFilesCount) {
+                  activeFileIndex.value = oldFilesCount
+                } else {
+                  // 查找正在生成的文件
+                  const generatingIndex = newFiles.findIndex(f => f.isGenerating)
+                  if (generatingIndex !== -1) {
+                    // 如果当前文件已完成，切换到正在生成的文件
+                    const currentFile = newFiles[activeFileIndex.value]
+                    if (currentFile?.isComplete && generatingIndex !== activeFileIndex.value) {
+                      activeFileIndex.value = generatingIndex
+                    }
+                  }
+                }
+                
+                // 确保索引有效
+                if (activeFileIndex.value >= newFiles.length) {
+                  activeFileIndex.value = newFiles.length - 1
+                }
               }
               
               scrollToBottom()
@@ -727,11 +820,30 @@ const generateCodeStream = async (userMessage: string) => {
                 aiMessage.error = false
               }
               const newFiles = parseCodeFiles(accumulatedContent)
+              const oldFilesCount = codeFiles.value.length
               codeFiles.value = newFiles
               
-              // 如果有新文件且当前没有选中文件，自动切换到第一个文件
-              if (newFiles.length > 0 && activeFileIndex.value >= newFiles.length) {
-                activeFileIndex.value = 0
+              // 智能切换文件：优先显示正在生成的文件
+              if (newFiles.length > 0) {
+                // 如果有新文件出现，切换到第一个新文件
+                if (newFiles.length > oldFilesCount) {
+                  activeFileIndex.value = oldFilesCount
+                } else {
+                  // 查找正在生成的文件
+                  const generatingIndex = newFiles.findIndex(f => f.isGenerating)
+                  if (generatingIndex !== -1) {
+                    // 如果当前文件已完成，切换到正在生成的文件
+                    const currentFile = newFiles[activeFileIndex.value]
+                    if (currentFile?.isComplete && generatingIndex !== activeFileIndex.value) {
+                      activeFileIndex.value = generatingIndex
+                    }
+                  }
+                }
+                
+                // 确保索引有效
+                if (activeFileIndex.value >= newFiles.length) {
+                  activeFileIndex.value = newFiles.length - 1
+                }
               }
               
               scrollToBottom()
@@ -786,17 +898,40 @@ const handleRetry = async (prompt?: string) => {
 
 const updatePreviewUrl = () => {
   if (appInfo.value?.codeGenType && appInfo.value?.id) {
-    previewUrl.value = `http://localhost:8102/api/static/${appInfo.value.codeGenType}_${appInfo.value.id}/`
+    const newUrl = `http://localhost:8102/api/static/${appInfo.value.codeGenType}_${appInfo.value.id}/`
+    // 如果URL变化，重置加载状态
+    if (previewUrl.value !== newUrl) {
+      previewLoaded.value = false
+      previewUrl.value = newUrl
+    } else {
+      previewUrl.value = newUrl
+    }
   }
 }
 
 const handlePreviewLoad = () => {
   previewLoaded.value = true
+  console.log('预览页面加载完成:', previewUrl.value)
 }
 
 const handleRefreshPreview = () => {
+  refreshPreview()
+}
+
+const refreshPreview = () => {
+  if (!previewUrl.value) {
+    updatePreviewUrl()
+  }
   previewLoaded.value = false
-  updatePreviewUrl()
+  // 强制刷新iframe
+  nextTick(() => {
+    const iframe = document.querySelector('.preview-iframe') as HTMLIFrameElement
+    if (iframe) {
+      // 添加时间戳防止缓存
+      const separator = previewUrl.value.includes('?') ? '&' : '?'
+      iframe.src = previewUrl.value + separator + '_t=' + Date.now()
+    }
+  })
 }
 
 const handleDeploy = async () => {
@@ -839,6 +974,32 @@ watch(
   },
 )
 
+// 监听代码文件变化，自动更新预览
+watch(
+  () => codeFiles.value.length,
+  (newLength, oldLength) => {
+    // 当代码文件从无到有时，更新预览
+    if (newLength > 0 && oldLength === 0 && appInfo.value?.codeGenType && appInfo.value?.id) {
+      nextTick(() => {
+        updatePreviewUrl()
+        setTimeout(() => {
+          refreshPreview()
+        }, 1000)
+      })
+    }
+  },
+)
+
+// 监听appInfo变化，更新预览URL
+watch(
+  () => [appInfo.value?.codeGenType, appInfo.value?.id],
+  () => {
+    if (appInfo.value?.codeGenType && appInfo.value?.id && codeFiles.value.length > 0) {
+      updatePreviewUrl()
+    }
+  },
+)
+
 onMounted(() => {
   loadAppInfo()
 })
@@ -849,15 +1010,21 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
+/* 根容器：100% 高度，适应父容器 */
 .chat-view {
   display: flex;
   flex-direction: column;
   height: 100%;
+  width: 100%;
   min-height: 0;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
   background: #f5f7fa;
   overflow: hidden;
 }
 
+/* 顶部固定头部 */
 .chat-header {
   display: flex;
   justify-content: space-between;
@@ -867,6 +1034,7 @@ onUnmounted(() => {
   background: #ffffff;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
   flex-shrink: 0;
+  min-height: 0;
   z-index: 10;
 }
 
@@ -877,32 +1045,53 @@ onUnmounted(() => {
   margin: 0;
 }
 
+/* 主内容区域：水平布局 */
 .chat-content {
   display: flex;
   flex: 1;
   min-height: 0;
+  min-width: 0;
   overflow: hidden;
 }
 
-/* 左侧：步骤指南 */
+/* 左侧：步骤指南区域 - 45% */
 .guide-panel {
   flex: 0 0 45%;
   min-width: 0;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   background: #ffffff;
   border-right: 1px solid rgba(0, 0, 0, 0.06);
   overflow: hidden;
-  position: relative;
-  z-index: 1;
 }
 
+/* 聊天消息容器：可独立滚动 */
 .guide-container {
   flex: 1;
+  min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
   padding: 24px;
-  min-height: 0;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(0, 0, 0, 0.2) transparent;
+}
+
+.guide-container::-webkit-scrollbar {
+  width: 8px;
+}
+
+.guide-container::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.guide-container::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 4px;
+}
+
+.guide-container::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 0, 0, 0.3);
 }
 
 .guide-content {
@@ -929,6 +1118,9 @@ onUnmounted(() => {
   margin-left: auto;
   font-size: 14px;
   line-height: 1.6;
+  word-wrap: break-word;
+  word-break: break-word;
+  box-shadow: 0 2px 8px rgba(24, 144, 255, 0.2);
 }
 
 .ai-guide {
@@ -1040,26 +1232,28 @@ onUnmounted(() => {
   gap: 8px;
 }
 
+/* 底部固定输入框 */
 .input-container {
   flex-shrink: 0;
+  min-height: 0;
   padding: 16px 24px;
   border-top: 1px solid rgba(0, 0, 0, 0.06);
   background: #ffffff;
-  position: relative;
   z-index: 10;
 }
 
-/* 右侧：代码编辑器 */
+/* 右侧：代码编辑器区域 - 55% */
 .code-panel {
   flex: 1;
   min-width: 0;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   background: #1e293b;
   overflow: hidden;
-  position: relative;
 }
 
+/* 代码头部：固定 */
 .code-header {
   display: flex;
   justify-content: space-between;
@@ -1068,6 +1262,7 @@ onUnmounted(() => {
   background: #0f172a;
   border-bottom: 1px solid rgba(255, 255, 255, 0.1);
   flex-shrink: 0;
+  min-height: 0;
 }
 
 .code-tabs {
@@ -1075,6 +1270,7 @@ onUnmounted(() => {
   gap: 4px;
   overflow-x: auto;
   flex: 1;
+  min-width: 0;
 }
 
 .code-tab {
@@ -1086,9 +1282,10 @@ onUnmounted(() => {
   color: rgba(255, 255, 255, 0.7);
   border-radius: 8px 8px 0 0;
   cursor: pointer;
-  transition: all 0.2s;
+  transition: all 0.2s ease;
   white-space: nowrap;
   border-bottom: 2px solid transparent;
+  position: relative;
 }
 
 .code-tab:hover {
@@ -1102,8 +1299,36 @@ onUnmounted(() => {
   border-bottom-color: #1890ff;
 }
 
+.code-tab.generating {
+  border-left: 2px solid #52c41a;
+}
+
+.code-tab.generating.active {
+  border-left: 2px solid #52c41a;
+  border-bottom-color: #52c41a;
+}
+
+.code-tab.complete {
+  opacity: 0.8;
+}
+
 .tab-icon {
   font-size: 14px;
+}
+
+.tab-generating-indicator {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 4px;
+  color: #52c41a;
+}
+
+.tab-complete-indicator {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 4px;
+  color: #52c41a;
+  font-size: 12px;
 }
 
 .tab-name {
@@ -1129,32 +1354,71 @@ onUnmounted(() => {
 
 .code-actions {
   padding: 8px 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
 }
 
-.code-content {
+.code-actions .ant-btn-link {
+  color: rgba(255, 255, 255, 0.7);
+  transition: color 0.2s ease;
+  padding: 4px 8px;
+}
+
+.code-actions .ant-btn-link:hover {
+  color: rgba(255, 255, 255, 0.9);
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 4px;
+}
+
+/* 代码和预览容器：重叠显示 */
+.code-preview-container {
   flex: 1;
+  min-height: 0;
+  position: relative;
   overflow: hidden;
+}
+
+/* 代码内容区域：可滚动，绝对定位与预览重叠 */
+.code-content {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
   display: flex;
   flex-direction: column;
   background: #1e293b;
+  overflow: hidden;
+  opacity: 1;
+  transition: opacity 0.3s ease;
+}
+
+.code-content[style*="display: none"] {
+  opacity: 0;
 }
 
 .code-empty {
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
-  height: 100%;
+  flex: 1;
+  min-height: 0;
   color: rgba(255, 255, 255, 0.5);
 }
 
 .code-editor {
   flex: 1;
-  overflow: hidden;
+  min-height: 0;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
 }
 
 .code-editor-header {
+  flex-shrink: 0;
   padding: 8px 16px;
   background: #0f172a;
   border-bottom: 1px solid rgba(255, 255, 255, 0.1);
@@ -1175,9 +1439,12 @@ onUnmounted(() => {
   color: rgba(255, 255, 255, 0.5);
 }
 
+/* 代码块：独立滚动 */
 .code-block {
   flex: 1;
-  overflow: auto;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: auto;
   margin: 0;
   padding: 20px;
   background: #1e293b;
@@ -1185,6 +1452,32 @@ onUnmounted(() => {
   font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
   font-size: 13px;
   line-height: 1.6;
+  scrollbar-width: thin;
+  white-space: pre;
+  word-wrap: normal;
+  word-break: normal;
+  scrollbar-color: rgba(255, 255, 255, 0.2) transparent;
+  white-space: pre;
+  word-wrap: normal;
+  word-break: normal;
+}
+
+.code-block::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.code-block::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.code-block::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 4px;
+}
+
+.code-block::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.3);
 }
 
 .code-block code {
@@ -1192,25 +1485,53 @@ onUnmounted(() => {
   padding: 0;
   border: none;
   color: inherit;
+  font-family: inherit;
+  font-size: inherit;
+  line-height: inherit;
+  white-space: pre;
+  word-wrap: normal;
+  word-break: normal;
+  display: block;
+  width: 100%;
 }
 
-/* 预览区域 */
+/* 预览区域：与代码重叠显示 */
 .preview-section {
-  flex: 0 0 40%;
-  min-height: 0;
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
   display: flex;
   flex-direction: column;
   background: #ffffff;
-  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  overflow: hidden;
+  opacity: 1;
+  transition: opacity 0.3s ease;
+  z-index: 2;
+}
+
+.preview-section[style*="display: none"],
+.preview-section[style*="display:none"] {
+  opacity: 0;
+  pointer-events: none;
+  z-index: 0;
 }
 
 .preview-header {
+  flex-shrink: 0;
   display: flex;
   justify-content: space-between;
   align-items: center;
   padding: 12px 16px;
   background: #f8f9fa;
   border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+  min-height: 44px;
+}
+
+.preview-loading {
+  display: flex;
+  align-items: center;
 }
 
 .preview-header h4 {
@@ -1220,27 +1541,60 @@ onUnmounted(() => {
   color: #1a1a1a;
 }
 
+/* 预览内容：可滚动 */
 .preview-content {
   flex: 1;
-  overflow: hidden;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: auto;
   background: #ffffff;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(0, 0, 0, 0.2) transparent;
+}
+
+.preview-content::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.preview-content::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.preview-content::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 4px;
+}
+
+.preview-content::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 0, 0, 0.3);
 }
 
 .preview-iframe {
   width: 100%;
   height: 100%;
+  min-height: 100%;
   border: none;
   display: block;
+}
+
+.preview-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 1;
+  min-height: 0;
 }
 
 .empty-messages {
   display: flex;
   align-items: center;
   justify-content: center;
-  height: 100%;
-  min-height: 300px;
+  flex: 1;
+  min-height: 0;
 }
 
+/* 响应式布局 */
 @media (max-width: 1024px) {
   .chat-content {
     flex-direction: column;
@@ -1248,26 +1602,31 @@ onUnmounted(() => {
 
   .guide-panel {
     flex: 0 0 50%;
+    min-height: 0;
     border-right: none;
     border-bottom: 1px solid rgba(0, 0, 0, 0.06);
   }
 
   .code-panel {
     flex: 0 0 50%;
+    min-height: 0;
   }
 
   .preview-section {
     flex: 0 0 30%;
+    min-height: 0;
   }
 }
 
 @media (max-width: 768px) {
   .guide-panel {
     flex: 0 0 60%;
+    min-height: 0;
   }
 
   .code-panel {
     flex: 0 0 40%;
+    min-height: 0;
   }
 
   .preview-section {

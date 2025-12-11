@@ -45,11 +45,16 @@
   position: fixed;
   bottom: 0;
   left: 0;
+  right: 0;
   width: 100%;
   border-top: 1px solid rgba(15, 23, 42, 0.08);
   box-shadow: 0 -24px 45px rgba(15, 23, 42, 0.08);
-  min-height: var(--layout-footer-height, 70px);
+  height: var(--layout-footer-height, 72px);
+  min-height: var(--layout-footer-height, 72px);
+  max-height: var(--layout-footer-height, 72px);
   z-index: 1000;
+  display: flex;
+  align-items: center;
 }
 
 .footer-content {
