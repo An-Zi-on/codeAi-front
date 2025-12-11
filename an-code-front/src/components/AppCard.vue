@@ -159,6 +159,8 @@ const handleImageError = (e: Event) => {
 
 .app-info-left {
   flex-shrink: 0;
+  display: flex;
+  align-items: flex-start;
 }
 
 .app-info-right {
@@ -166,14 +168,15 @@ const handleImageError = (e: Event) => {
   min-width: 0;
   display: flex;
   flex-direction: column;
-  justify-content: center;
+  justify-content: flex-start;
+  gap: 4px;
 }
 
 .app-name {
   font-size: 16px;
   font-weight: 600;
   color: #262626;
-  margin: 0 0 4px 0;
+  margin: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

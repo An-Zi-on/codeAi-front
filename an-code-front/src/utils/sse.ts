@@ -118,15 +118,28 @@ export function createSSEConnection(
 
   // 处理错误
   eventSource.onerror = (error) => {
-    console.error('SSE error:', error, 'readyState:', eventSource.readyState)
+    const currentState = eventSource.readyState
+    console.error('SSE error:', error, 'readyState:', currentState, {
+      CONNECTING: EventSource.CONNECTING,
+      OPEN: EventSource.OPEN,
+      CLOSED: EventSource.CLOSED
+    })
+    
+    // 先调用错误回调，让调用方决定如何处理
     options.onError?.(error)
-    // 如果连接关闭，调用完成回调（但只调用一次）
-    if (eventSource.readyState === EventSource.CLOSED) {
+    
+    // 只有在连接确实关闭时才触发完成回调
+    // 如果连接正在连接中或仍打开，可能是临时错误，不触发完成
+    if (currentState === EventSource.CLOSED) {
       console.log('SSE 连接已关闭，触发完成回调')
       // 延迟一点确保所有消息都已处理
       setTimeout(() => {
         safeOnComplete()
       }, 100)
+    } else if (currentState === EventSource.CONNECTING) {
+      console.log('SSE 连接正在建立中，忽略错误')
+    } else if (currentState === EventSource.OPEN) {
+      console.log('SSE 连接仍打开，可能是临时错误，继续等待')
     }
   }
   

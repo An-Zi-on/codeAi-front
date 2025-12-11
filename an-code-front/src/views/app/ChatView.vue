@@ -54,7 +54,7 @@
                   <h3>{{ extractTitle(message.content) || '生成指南' }}</h3>
                   <p class="guide-subtitle">{{ extractSubtitle(message.content) }}</p>
                 </div>
-                <div class="steps-container" v-html="renderGuideSteps(message.content)"></div>
+                <div class="markdown-content" v-html="renderMarkdown(message.content)"></div>
                 <div v-if="message.streaming" class="streaming-indicator">
                   <a-spin size="small" />
                   <span>AI 正在生成...</span>
@@ -87,8 +87,8 @@
       </div>
 
       <!-- 可拖拽的分隔条 -->
-      <div 
-        class="resizer" 
+      <div
+        class="resizer"
         @mousedown="handleResizeStart"
         @dblclick="handleResetResize"
       >
@@ -102,7 +102,7 @@
             <div
               v-for="(file, idx) in codeFiles"
               :key="idx"
-              :class="['code-tab', { 
+              :class="['code-tab', {
                 active: activeFileIndex === idx,
                 generating: file.isGenerating,
                 complete: file.isComplete && !file.isGenerating
@@ -215,14 +215,39 @@ import { ReloadOutlined } from '@ant-design/icons-vue'
 // 动态导入 marked 和 highlight.js
 let marked: any = null
 let hljs: any = null
+let markedReady = false
 
 import('marked')
   .then((module) => {
     marked = module.marked
+    // 配置 marked 选项
+    if (marked) {
+      marked.setOptions({
+        breaks: true, // 支持 GitHub 风格的换行
+        gfm: true, // 启用 GitHub Flavored Markdown
+        highlight: function(code: string, lang: string) {
+          if (!hljs || !lang) {
+            return code
+          }
+          try {
+            return hljs.highlight(code, { language: lang }).value
+          } catch (err) {
+            // 如果指定语言失败，尝试自动检测
+            try {
+              return hljs.highlightAuto(code).value
+            } catch (autoErr) {
+              return code
+            }
+          }
+        }
+      })
+    }
     return import('highlight.js')
   })
   .then((module) => {
     hljs = module.default
+    markedReady = true
+    // 导入代码高亮样式
     import('highlight.js/styles/github-dark.css').catch(() => {
       console.warn('Highlight.js styles not found')
     })
@@ -309,7 +334,7 @@ const currentFile = computed(() => codeFiles.value[activeFileIndex.value] || nul
 const highlightedCode = computed(() => {
   const file = currentFile.value
   if (!file || !file.content) return ''
-  
+
   // 使用 highlightCode 函数进行高亮
   return highlightCode(file.content, file.language || 'text')
 })
@@ -342,11 +367,11 @@ let highlightTimer: number | null = null
 // 使用 requestAnimationFrame 优化更新
 const scheduleUpdate = (updateFn: () => void) => {
   pendingUpdate = updateFn
-  
+
   if (updateTimer === null) {
     const now = Date.now()
     const timeSinceLastUpdate = now - lastUpdateTime
-    
+
     if (timeSinceLastUpdate >= UPDATE_THROTTLE_MS) {
       // 立即执行
       requestAnimationFrame(() => {
@@ -394,24 +419,48 @@ const extractSubtitle = (content: string): string => {
   return ''
 }
 
-// 渲染步骤指南
+// 渲染 Markdown 内容（使用 marked 库）
+const renderMarkdown = (content: string): string => {
+  if (!content) return ''
+  
+  // 如果 marked 还未加载，使用简单的转义和换行处理
+  if (!marked || !markedReady) {
+    return escapeHtml(content).replace(/\n/g, '<br>')
+  }
+  
+  try {
+    // 使用 marked 渲染 Markdown
+    return marked.parse(content)
+  } catch (error) {
+    console.error('Markdown 渲染失败:', error)
+    // 降级处理：转义 HTML 并保留换行
+    return escapeHtml(content).replace(/\n/g, '<br>')
+  }
+}
+
+// 渲染步骤指南（保留用于兼容，但优先使用 Markdown 渲染）
 const renderGuideSteps = (content: string): string => {
   if (!content) return ''
   
-  // 提取所有步骤
+  // 优先使用 Markdown 渲染
+  if (marked && markedReady) {
+    return renderMarkdown(content)
+  }
+  
+  // 降级处理：提取所有步骤
   const stepRegex = /STEP\s+(\d+)[：:]\s*(.+?)(?=STEP\s+\d+[：:]|```|$)/gis
   const steps: string[] = []
   let match
-  
+
   while ((match = stepRegex.exec(content)) !== null) {
     const stepNum = match[1]
     const stepContent = match[2].trim()
-    
+
     // 提取步骤描述和文件引用
     const fileMatch = stepContent.match(/`([^`]+\.(jsx?|tsx?|vue|css|html))`/i)
     const fileRef = fileMatch ? fileMatch[1] : ''
     const description = stepContent.replace(/`[^`]+`/g, '').trim()
-    
+
     steps.push(`
       <div class="step-item">
         <div class="step-header">
@@ -425,7 +474,7 @@ const renderGuideSteps = (content: string): string => {
       </div>
     `)
   }
-  
+
   // 如果没有找到STEP格式，尝试其他格式
   if (steps.length === 0) {
     // 尝试提取代码块前的描述
@@ -443,8 +492,8 @@ const renderGuideSteps = (content: string): string => {
       }
     })
   }
-  
-  return steps.join('')
+
+  return steps.length > 0 ? steps.join('') : escapeHtml(content).replace(/\n/g, '<br>')
 }
 
 // 解析代码文件 - 优化性能，避免大内容导致卡死
@@ -453,7 +502,7 @@ const parseCodeFiles = (content: string) => {
   const fileMap = new Map<string, CodeFile>()
   const completedFiles = new Set<string>() // 已完成的文件
   const generatingFiles = new Set<string>() // 正在生成的文件
-  
+
   // 如果内容过大，限制处理长度（避免卡死）
   // 增加到2MB，但会警告用户
   const maxContentLength = 2 * 1024 * 1024 // 2MB
@@ -462,13 +511,13 @@ const parseCodeFiles = (content: string) => {
     console.warn('内容过大，仅处理前2MB:', content.length)
     contentToProcess = content.substring(0, maxContentLength)
   }
-  
+
   // 匹配完整的代码块：```lang filename\ncode```
   const codeBlockRegex = /```(\w+)?\s*([^\n]+)?\n([\s\S]*?)```/g
   let match
   let matchCount = 0
   const maxMatches = 100 // 限制最大匹配次数，避免无限循环
-  
+
   while ((match = codeBlockRegex.exec(contentToProcess)) !== null) {
     matchCount++
     if (matchCount > maxMatches) {
@@ -478,7 +527,7 @@ const parseCodeFiles = (content: string) => {
     const language = match[1] || 'text'
     const fileName = match[2]?.trim() || `file.${getDefaultExtension(language)}`
     const code = match[3].trim()
-    
+
     fileMap.set(fileName, {
       name: fileName,
       content: code,
@@ -488,7 +537,7 @@ const parseCodeFiles = (content: string) => {
     })
     completedFiles.add(fileName)
   }
-  
+
   // 处理未完成的代码块（实时显示）
   // 查找所有 ``` 标记，包括未闭合的
   // 使用更精确的正则表达式匹配未完成的代码块
@@ -496,7 +545,7 @@ const parseCodeFiles = (content: string) => {
   let unclosedMatch
   let unclosedMatchCount = 0
   const maxUnclosedMatches = 50 // 限制未完成代码块的匹配次数
-  
+
   while ((unclosedMatch = unclosedCodeBlockRegex.exec(contentToProcess)) !== null) {
     unclosedMatchCount++
     if (unclosedMatchCount > maxUnclosedMatches) {
@@ -506,15 +555,15 @@ const parseCodeFiles = (content: string) => {
     const language = unclosedMatch[1] || 'text'
     const fileName = unclosedMatch[2]?.trim() || `file.${getDefaultExtension(language)}`
     const code = unclosedMatch[3] || ''
-    
+
     // 检查这个代码块是否已经完成（在完整代码块匹配中）
     const isComplete = completedFiles.has(fileName)
-    
+
     // 如果文件已经完成，跳过未完成代码块的处理，使用完整版本
     if (isComplete) {
       continue
     }
-    
+
     // 如果这个文件还没有完整版本，或者当前内容更长，则更新
     if (!fileMap.has(fileName) || code.length > (fileMap.get(fileName)?.content.length || 0)) {
       // 检查是否是未闭合的（在内容末尾查找是否有结束的```）
@@ -522,10 +571,10 @@ const parseCodeFiles = (content: string) => {
       const remainingContent = contentToProcess.substring(blockEnd)
       const hasClosingBackticks = remainingContent.trim().startsWith('```')
       const isUnclosed = !hasClosingBackticks
-      
+
       // 只有在未闭合时才标记为正在生成
       const isGenerating = isUnclosed
-      
+
       fileMap.set(fileName, {
         name: fileName,
         content: code.trim(),
@@ -533,16 +582,16 @@ const parseCodeFiles = (content: string) => {
         isComplete: false,
         isGenerating: isGenerating,
       })
-      
+
       if (isGenerating) {
         generatingFiles.add(fileName)
       }
     }
   }
-  
+
   // 将 Map 转换为数组，按生成顺序排序
   const fileArray = Array.from(fileMap.values())
-  
+
   // 排序：正在生成的在前，已完成的在后，按出现顺序
   fileArray.sort((a, b) => {
     // 正在生成的优先
@@ -553,19 +602,19 @@ const parseCodeFiles = (content: string) => {
     if (a.isComplete && !b.isComplete) return 1
     return 0
   })
-  
+
   files.push(...fileArray)
-  
+
   // 如果没有找到代码块，尝试从STEP中提取文件名
   if (files.length === 0) {
     const fileRefRegex = /`([^\s`]+\.(jsx?|tsx?|vue|css|html))`/gi
     const fileNames = new Set<string>()
     let fileMatch
-    
+
     while ((fileMatch = fileRefRegex.exec(content)) !== null) {
       fileNames.add(fileMatch[1])
     }
-    
+
     fileNames.forEach((name) => {
       if (!fileMap.has(name)) {
         files.push({
@@ -578,7 +627,7 @@ const parseCodeFiles = (content: string) => {
       }
     })
   }
-  
+
   return files
 }
 
@@ -615,13 +664,13 @@ const highlightCache = new Map<string, string>()
 // 代码高亮 - 优化性能，避免大文件导致卡死
 const highlightCode = (code: string, language: string): string => {
   if (!code || code.trim() === '') return escapeHtml(code || '')
-  
+
   // 对于超大文件，直接返回转义后的文本，不进行高亮
   if (code.length > 50000) {
     console.warn('代码文件过大，跳过语法高亮以避免性能问题')
     return escapeHtml(code)
   }
-  
+
   // 使用缓存避免重复高亮（仅对小于10KB的文件使用缓存）
   let cacheKey: string | null = null
   if (code.length < 10000) {
@@ -630,12 +679,12 @@ const highlightCode = (code: string, language: string): string => {
       return highlightCache.get(cacheKey)!
     }
   }
-  
+
   // 如果语言是 'text' 或空，尝试自动检测
   const langToUse = language && language !== 'text' ? language : undefined
-  
+
   let result = ''
-  
+
   if (hljs && langToUse) {
     try {
       result = hljs.highlight(code, { language: langToUse }).value
@@ -663,7 +712,7 @@ const highlightCode = (code: string, language: string): string => {
   } else {
     result = escapeHtml(code)
   }
-  
+
   // 缓存结果（限制缓存大小，仅缓存小文件）
   if (cacheKey) {
     if (highlightCache.size > 50) {
@@ -675,7 +724,7 @@ const highlightCode = (code: string, language: string): string => {
     }
     highlightCache.set(cacheKey, result)
   }
-  
+
   return result
 }
 
@@ -692,10 +741,10 @@ const escapeHtml = (unsafe: string) => {
 // 允许在代码生成时切换已经完成的文件
 const handleFileSwitch = (index: number) => {
   if (index === activeFileIndex.value) return // 如果点击的是当前文件，不处理
-  
+
   const targetFile = codeFiles.value[index]
   if (!targetFile) return
-  
+
   // 允许切换已完成的文件，即使正在生成其他文件
   // 如果目标文件正在生成，也可以切换（让用户看到实时生成过程）
   // 使用 nextTick 延迟切换，避免在渲染过程中切换
@@ -758,7 +807,7 @@ const loadChatHistory = async () => {
         content: item.message || '',
         streaming: false,
       }))
-      
+
       // 解析最后一个AI消息的代码文件
       const lastAiMessage = messages.value.filter(m => m.role === 'ai').pop()
       if (lastAiMessage) {
@@ -799,7 +848,7 @@ const loadAppInfo = async () => {
     if (response.data?.code === 0 && response.data?.data) {
       appInfo.value = response.data.data
       await loadChatHistory()
-      
+
       // 如果不是查看模式，且有初始提示词，且没有历史消息，且未触发过自动生成，自动调用生成代码接口
       if (!isViewMode.value && messages.value.length === 0 && appInfo.value.initPrompt && !autoGenTriggered.value) {
         autoGenTriggered.value = true
@@ -813,7 +862,7 @@ const loadAppInfo = async () => {
                 role: 'user',
                 content: initPrompt,
               })
-              
+
               // 保存用户消息
               try {
                 await saveMessage({
@@ -824,7 +873,7 @@ const loadAppInfo = async () => {
               } catch (error) {
                 console.error('保存消息失败:', error)
               }
-              
+
               // 添加AI消息占位符
               const aiMessageIndex = messages.value.length
               messages.value.push({
@@ -832,7 +881,7 @@ const loadAppInfo = async () => {
                 content: '',
                 streaming: true,
               })
-              
+
               scrollToBottom()
               // 调用生成代码接口
               await generateCodeStream(initPrompt)
@@ -911,14 +960,74 @@ const handleStreamComplete = (content: string) => {
     appInfo: {
       codeGenType: appInfo.value?.codeGenType,
       id: appInfo.value?.id
-    }
+    },
+    codeFilesCount: codeFiles.value.length
   })
-  
+
   const aiMessageIndex = messages.value.length - 1
   if (aiMessageIndex >= 0) {
     messages.value[aiMessageIndex].streaming = false
   }
   streaming.value = false
+
+  // 无论是否有content，都尝试更新预览（后端可能已经生成了文件）
+  const shouldUpdatePreview = () => {
+    if (appInfo.value?.codeGenType && appInfo.value?.id) {
+      console.log('准备更新预览:', {
+        codeGenType: appInfo.value.codeGenType,
+        id: appInfo.value.id,
+        codeFilesCount: codeFiles.value.length,
+        hasContent: !!content
+      })
+
+      // 强制更新预览URL
+      updatePreviewUrl()
+
+      // 延迟刷新预览，确保后端文件已保存
+      // 使用多个延迟点，确保文件系统已完全写入
+      setTimeout(() => {
+        console.log('第一次刷新预览尝试，当前状态:', {
+          previewUrl: previewUrl.value,
+          previewEnabled: previewEnabled.value,
+          showCodeView: showCodeView.value
+        })
+        refreshPreview()
+      }, 2000) // 2秒后第一次尝试
+
+      // 如果第一次失败，5秒后再次尝试
+      setTimeout(() => {
+        console.log('第二次刷新预览尝试')
+        if (!previewLoaded.value && previewUrl.value) {
+          refreshPreview()
+        }
+      }, 5000) // 5秒后第二次尝试
+
+      // 如果还是失败，10秒后最后一次尝试
+      setTimeout(() => {
+        console.log('第三次刷新预览尝试（最后一次）')
+        if (!previewLoaded.value && previewUrl.value) {
+          refreshPreview()
+        }
+      }, 10000) // 10秒后最后一次尝试
+    } else {
+      console.warn('无法更新预览：缺少必要信息', {
+        codeGenType: appInfo.value?.codeGenType,
+        id: appInfo.value?.id,
+        appInfo: appInfo.value
+      })
+      // 即使缺少信息，也尝试从已有信息更新
+      if (appInfo.value?.id) {
+        console.log('尝试使用已有ID更新预览URL')
+        const codeGenType = appInfo.value.codeGenType || 'multi_file' // 默认值
+        const newUrl = `http://localhost:8102/api/static/${codeGenType}_${appInfo.value.id}/index.html`
+        previewUrl.value = newUrl
+        previewKey.value++
+        setTimeout(() => {
+          refreshPreview()
+        }, 2000)
+      }
+    }
+  }
 
   if (content) {
     saveMessage({
@@ -935,14 +1044,14 @@ const handleStreamComplete = (content: string) => {
       fileCount: parsedFiles.length,
       fileNames: parsedFiles.map(f => f.name)
     })
-    
+
     // 确保所有文件都标记为已完成，不再生成
     codeFiles.value = parsedFiles.map(file => ({
       ...file,
       isComplete: true,
       isGenerating: false,
     }))
-    
+
     if (codeFiles.value.length > 0) {
       activeFileIndex.value = 0
       console.log('已设置代码文件，文件数量:', codeFiles.value.length)
@@ -952,56 +1061,13 @@ const handleStreamComplete = (content: string) => {
 
     // 更新预览URL并刷新预览 - 无论是否有代码文件都尝试更新
     nextTick(() => {
-      if (appInfo.value?.codeGenType && appInfo.value?.id) {
-        console.log('代码生成完成，准备更新预览:', {
-          codeGenType: appInfo.value.codeGenType,
-          id: appInfo.value.id,
-          codeFilesCount: codeFiles.value.length,
-          hasContent: !!content
-        })
-        
-        // 强制更新预览URL
-        updatePreviewUrl()
-        
-        // 延迟刷新预览，确保后端文件已保存
-        // 增加延迟时间，确保后端文件系统已完全写入
-        setTimeout(() => {
-          console.log('开始刷新预览，当前状态:', {
-            previewUrl: previewUrl.value,
-            previewEnabled: previewEnabled.value,
-            showCodeView: showCodeView.value
-          })
-          refreshPreview()
-        }, 3000) // 增加到3秒，确保后端文件已保存
-      } else {
-        console.warn('无法更新预览：缺少必要信息', {
-          codeGenType: appInfo.value?.codeGenType,
-          id: appInfo.value?.id,
-          appInfo: appInfo.value
-        })
-        // 即使缺少信息，也尝试从已有信息更新
-        if (appInfo.value?.id) {
-          console.log('尝试使用已有ID更新预览URL')
-          const codeGenType = appInfo.value.codeGenType || 'multi_file' // 默认值
-          const newUrl = `http://localhost:8102/api/static/code_output/${codeGenType}_${appInfo.value.id}/`
-          previewUrl.value = newUrl
-          previewKey.value++
-          setTimeout(() => {
-            refreshPreview()
-          }, 3000)
-        }
-      }
+      shouldUpdatePreview()
     })
   } else {
     console.warn('警告：代码生成完成但内容为空，尝试更新预览')
     // 即使内容为空，也尝试更新预览（后端可能已经生成了文件）
     nextTick(() => {
-      if (appInfo.value?.codeGenType && appInfo.value?.id) {
-        updatePreviewUrl()
-        setTimeout(() => {
-          refreshPreview()
-        }, 3000)
-      }
+      shouldUpdatePreview()
     })
   }
 }
@@ -1010,7 +1076,7 @@ const generateCodeStream = async (userMessage: string) => {
   // 超时定时器需要在函数作用域内声明，以便在catch块中也能访问
   let noDataTimeout: number | null = null
   let lastChunkTime = Date.now() // 记录最后收到数据块的时间
-  
+
   try {
     // 防止重复调用：已有流或连接未关闭时直接返回
     if (streaming.value || sseConnection) {
@@ -1034,37 +1100,55 @@ const generateCodeStream = async (userMessage: string) => {
           try {
             // 更新最后收到数据的时间
             lastChunkTime = Date.now()
-            
+
             // 清除无数据超时定时器
             if (noDataTimeout !== null) {
               clearTimeout(noDataTimeout)
               noDataTimeout = null
             }
-            
+
             // 重新设置无数据超时检测（10分钟无数据则认为连接可能断开）
             noDataTimeout = window.setTimeout(() => {
-              console.warn('超过10分钟未收到数据，连接可能已断开')
-              if (sseConnection && sseConnection.readyState === EventSource.CLOSED) {
-                console.log('检测到连接已关闭，触发完成回调')
+              console.warn('超过10分钟未收到数据，检查连接状态')
+              const currentState = sseConnection?.readyState
+              console.log('无数据超时时的连接状态:', {
+                readyState: currentState,
+                CONNECTING: EventSource.CONNECTING,
+                OPEN: EventSource.OPEN,
+                CLOSED: EventSource.CLOSED,
+                accumulatedContentLength: accumulatedContent.length,
+                codeFilesCount: codeFiles.value.length
+              })
+              
+              // 如果连接已关闭，或者连接不是OPEN状态，则处理完成
+              if (sseConnection && (currentState === EventSource.CLOSED || currentState !== EventSource.OPEN)) {
+                console.log('检测到连接已关闭或非打开状态，触发完成回调')
                 if (accumulatedContent || codeFiles.value.length > 0) {
                   handleStreamComplete(accumulatedContent || '')
+                } else {
+                  // 即使没有内容，也尝试完成处理（后端可能已经生成文件）
+                  handleStreamComplete('')
                 }
                 closeSSEConnection(sseConnection)
                 sseConnection = null
                 streaming.value = false
+              } else if (currentState === EventSource.OPEN) {
+                // 连接仍然打开，但长时间无数据，可能是后端卡住
+                console.warn('连接仍打开但长时间无数据，可能是后端处理缓慢，继续等待')
+                // 不关闭连接，继续等待
               }
             }, 10 * 60 * 1000) // 10分钟
-            
+
             const jsonData = JSON.parse(msg.data)
             const chunk = jsonData.d || ''
             if (chunk) {
               accumulatedContent += chunk
-              
+
               // 如果内容过大（超过10MB），进行警告
               if (accumulatedContent.length > 10 * 1024 * 1024) {
                 console.warn('累积内容过大，可能导致性能问题:', accumulatedContent.length)
               }
-              
+
               // 立即更新消息内容（这个更新很快，不需要节流）
               const aiMessage = messages.value[aiMessageIndex]
               if (aiMessage) {
@@ -1072,14 +1156,14 @@ const generateCodeStream = async (userMessage: string) => {
                 aiMessage.streaming = true
                 aiMessage.error = false
               }
-              
+
               // 使用节流更新代码文件和DOM（避免频繁解析和更新导致卡死）
               scheduleUpdate(() => {
                 // 实时解析代码文件
                 const newFiles = parseCodeFiles(accumulatedContent)
                 const oldFilesCount = codeFiles.value.length
                 codeFiles.value = newFiles
-                
+
                 // 智能切换文件：优先显示正在生成的文件（仅在用户未手动切换时）
                 if (newFiles.length > 0) {
                   // 如果有新文件出现，切换到第一个新文件
@@ -1096,23 +1180,23 @@ const generateCodeStream = async (userMessage: string) => {
                       }
                     }
                   }
-                  
+
                   // 确保索引有效
                   if (activeFileIndex.value >= newFiles.length) {
                     activeFileIndex.value = newFiles.length - 1
                   }
                 }
-                
+
                 // 自动滚动代码窗口到生成位置
                 scrollCodeToBottom()
-                
+
                 scrollToBottom()
               })
             }
           } catch (error) {
             if (msg.data) {
               accumulatedContent += msg.data
-              
+
               // 立即更新消息内容
               const aiMessage = messages.value[aiMessageIndex]
               if (aiMessage) {
@@ -1120,13 +1204,13 @@ const generateCodeStream = async (userMessage: string) => {
                 aiMessage.streaming = true
                 aiMessage.error = false
               }
-              
+
               // 使用节流更新代码文件
               scheduleUpdate(() => {
                 const newFiles = parseCodeFiles(accumulatedContent)
                 const oldFilesCount = codeFiles.value.length
                 codeFiles.value = newFiles
-                
+
                 // 智能切换文件：优先显示正在生成的文件
                 if (newFiles.length > 0) {
                   if (newFiles.length > oldFilesCount) {
@@ -1140,15 +1224,15 @@ const generateCodeStream = async (userMessage: string) => {
                       }
                     }
                   }
-                  
+
                   if (activeFileIndex.value >= newFiles.length) {
                     activeFileIndex.value = newFiles.length - 1
                   }
                 }
-                
+
                 // 自动滚动代码窗口到生成位置
                 scrollCodeToBottom()
-                
+
                 scrollToBottom()
               })
             }
@@ -1156,17 +1240,37 @@ const generateCodeStream = async (userMessage: string) => {
         },
         onError: (error) => {
           console.error('SSE error:', error)
-          
+
+          // 检查连接状态
+          const connectionState = sseConnection?.readyState
+          console.log('SSE错误时的连接状态:', {
+            readyState: connectionState,
+            CONNECTING: EventSource.CONNECTING,
+            OPEN: EventSource.OPEN,
+            CLOSED: EventSource.CLOSED,
+            accumulatedContentLength: accumulatedContent.length,
+            codeFilesCount: codeFiles.value.length
+          })
+
+          // 如果连接正在连接中，可能是临时网络波动，不处理
+          if (connectionState === EventSource.CONNECTING) {
+            console.log('连接正在建立中，忽略错误')
+            return
+          }
+
+          // 如果连接是OPEN状态，可能是临时错误，不立即关闭
+          if (connectionState === EventSource.OPEN) {
+            console.log('连接仍处于打开状态，可能是临时错误，继续等待')
+            // 不清理超时定时器，继续等待数据
+            return
+          }
+
           // 清理超时定时器
           if (noDataTimeout !== null) {
             clearTimeout(noDataTimeout)
             noDataTimeout = null
           }
-          
-          // 检查连接状态
-          const connectionState = sseConnection?.readyState
-          console.log('SSE错误时的连接状态:', connectionState)
-          
+
           // 如果连接是CLOSED状态，可能是正常关闭或超时
           if (connectionState === EventSource.CLOSED) {
             // 如果有内容，说明可能已经完成，只是连接关闭了
@@ -1179,7 +1283,8 @@ const generateCodeStream = async (userMessage: string) => {
               return
             }
           }
-          
+
+          // 连接确实断开，处理错误
           const aiMessage = messages.value[aiMessageIndex]
           if (aiMessage) {
             aiMessage.streaming = false
@@ -1205,44 +1310,46 @@ const generateCodeStream = async (userMessage: string) => {
         },
         onComplete: () => {
           // 防止重复执行：检查是否已经处理过完成逻辑
-          if (!streaming.value) {
+          if (!streaming.value && !sseConnection) {
             console.warn('onComplete 被重复调用，已忽略')
             return
           }
-          
+
           console.log('=== SSE onComplete 回调触发 ===', {
             accumulatedContentLength: accumulatedContent.length,
             streaming: streaming.value,
             sseConnectionExists: !!sseConnection,
-            hasAppInfo: !!(appInfo.value?.codeGenType && appInfo.value?.id)
+            hasAppInfo: !!(appInfo.value?.codeGenType && appInfo.value?.id),
+            codeFilesCount: codeFiles.value.length
           })
-          
-          // 立即设置streaming为false，防止重复执行
-          streaming.value = false
-          
+
           // 清理超时定时器
           if (noDataTimeout !== null) {
             clearTimeout(noDataTimeout)
             noDataTimeout = null
           }
-          
+
+          // 关闭连接（在调用handleStreamComplete之前）
+          const connectionToClose = sseConnection
+          sseConnection = null
+          if (connectionToClose) {
+            closeSSEConnection(connectionToClose)
+          }
+
+          // 立即设置streaming为false，防止重复执行
+          streaming.value = false
+
           // 确保在完成时处理内容，即使内容可能为空（后端可能已经生成文件）
+          // 无论是否有accumulatedContent，都调用handleStreamComplete以确保预览更新
           if (accumulatedContent || codeFiles.value.length > 0) {
+            console.log('调用handleStreamComplete，内容长度:', accumulatedContent.length, '代码文件数:', codeFiles.value.length)
             handleStreamComplete(accumulatedContent || '')
           } else {
             // 即使没有内容，也尝试更新预览（后端可能已经生成了文件）
             console.log('SSE完成但无内容，尝试更新预览')
-            nextTick(() => {
-              if (appInfo.value?.codeGenType && appInfo.value?.id) {
-                updatePreviewUrl()
-                setTimeout(() => {
-                  refreshPreview()
-                }, 3000)
-              }
-            })
+            // 强制调用handleStreamComplete以确保预览更新逻辑执行
+            handleStreamComplete('')
           }
-          closeSSEConnection(sseConnection)
-          sseConnection = null
         },
       },
     )
@@ -1277,24 +1384,24 @@ const updatePreviewUrl = () => {
   if (appInfo.value?.codeGenType && appInfo.value?.id) {
     const codeGenType = appInfo.value.codeGenType
     const appIdValue = appInfo.value.id
-    // 后端路径：codeAi/tmp/code_output/{codeGenType}_{appId}/
-    // 根据后端实际配置，尝试不同的路径格式
-    // 常见配置：
-    // 1. /api/static/code_output/{codeGenType}_{appId}/ -> codeAi/tmp/code_output/{codeGenType}_{appId}/
-    // 2. /code_output/{codeGenType}_{appId}/ -> codeAi/tmp/code_output/{codeGenType}_{appId}/
-    // 3. /static/code_output/{codeGenType}_{appId}/ -> codeAi/tmp/code_output/{codeGenType}_{appId}/
-    // 如果还是404，请检查后端WebMvcConfigurer或ResourceHandler配置
-    const newUrl = `http://localhost:8102/api/static/code_output/${codeGenType}_${appIdValue}/`
-    
+    // 后端配置说明：
+    // - WebConfig: ResourceHandler("/static/**") -> ResourceLocation("file:{user.dir}/tmp/code_output/")
+    // - CodeFileSaver: 文件保存到 {user.dir}/tmp/code_output/{codeGenType}_{appId}/
+    // - 访问URL: http://localhost:8102/api/static/{codeGenType}_{appId}/index.html
+    // 注意：后端映射 /static/** 到 file:{user.dir}/tmp/code_output/，URL中不需要包含 code_output
+    const newUrl = `http://localhost:8102/api/static/${codeGenType}_${appIdValue}/index.html`
+
     console.log('更新预览URL:', {
       codeGenType,
       appId: appIdValue,
       newUrl,
       oldUrl: previewUrl.value,
-      '后端文件路径': `codeAi/tmp/code_output/${codeGenType}_${appIdValue}/`,
-      '提示': '如果404，请检查后端静态资源映射配置，确认 /api/static/** 是否正确映射到 codeAi/tmp/code_output/**'
+      '后端ResourceHandler': '/static/**',
+      '后端ResourceLocation': 'file:{user.dir}/tmp/code_output/',
+      '实际文件路径': `{user.dir}/tmp/code_output/${codeGenType}_${appIdValue}/index.html`,
+      '预期文件': `index.html (或 index.html, style.css, script.js)`
     })
-    
+
     // 如果URL变化，重置加载状态并更新key
     if (previewUrl.value !== newUrl) {
       previewLoaded.value = false
@@ -1346,7 +1453,7 @@ const refreshPreview = () => {
     // 尝试再次更新URL
     if (appInfo.value?.id) {
       const codeGenType = appInfo.value.codeGenType || 'multi_file'
-      const fallbackUrl = `http://localhost:8102/api/static/code_output/${codeGenType}_${appInfo.value.id}/`
+      const fallbackUrl = `http://localhost:8102/api/static/${codeGenType}_${appInfo.value.id}/index.html`
       console.log('使用备用URL:', fallbackUrl)
       previewUrl.value = fallbackUrl
       previewKey.value++
@@ -1405,7 +1512,7 @@ const scrollToBottom = () => {
   if (scrollTimer !== null) {
     return // 如果已有待执行的滚动，跳过
   }
-  
+
   scrollTimer = window.setTimeout(() => {
     nextTick(() => {
       if (guideContainerRef.value) {
@@ -1421,11 +1528,11 @@ const scrollCodeToBottom = () => {
   if (!shouldAutoScrollCode.value) {
     return // 如果用户手动滚动过，不自动滚动
   }
-  
+
   if (codeScrollTimer !== null) {
     return // 如果已有待执行的滚动，跳过
   }
-  
+
   codeScrollTimer = window.setTimeout(() => {
     nextTick(() => {
       if (codeBlockRef.value) {
@@ -1448,18 +1555,18 @@ const handleCodeScroll = (event: Event) => {
   if (isAutoScrolling) {
     return
   }
-  
+
   const target = event.target as HTMLElement
   if (!target) return
-  
+
   const scrollTop = target.scrollTop
   const scrollHeight = target.scrollHeight
   const clientHeight = target.clientHeight
-  
+
   // 计算是否接近底部（允许10px的误差）
   const threshold = 10
   const isNearBottom = scrollHeight - scrollTop - clientHeight <= threshold
-  
+
   // 如果用户滚动到底部，恢复自动跟随
   if (isNearBottom) {
     shouldAutoScrollCode.value = true
@@ -1521,11 +1628,11 @@ const handleResizeStart = (e: MouseEvent) => {
     const deltaX = moveEvent.clientX - startX
     const chatContentWidth = chatContent.offsetWidth
     const deltaPercent = (deltaX / chatContentWidth) * 100
-    
+
     let newLeftWidth = startLeftWidth + deltaPercent
     // 限制最小和最大宽度（20% - 80%）
     newLeftWidth = Math.max(20, Math.min(80, newLeftWidth))
-    
+
     leftPanelWidth.value = newLeftWidth
     rightPanelWidth.value = 100 - newLeftWidth
   }
@@ -1540,7 +1647,7 @@ const handleResizeStart = (e: MouseEvent) => {
 
   document.addEventListener('mousemove', handleMouseMove)
   document.addEventListener('mouseup', handleMouseUp)
-  
+
   // 防止文本选择
   e.preventDefault()
 }
@@ -1562,7 +1669,7 @@ onMounted(() => {
       rightPanelWidth.value = 100 - width
     }
   }
-  
+
   loadAppInfo()
 })
 
@@ -1724,6 +1831,206 @@ onUnmounted(() => {
 
 .steps-container {
   margin-top: 16px;
+}
+
+/* Markdown 内容样式 */
+.markdown-content {
+  margin-top: 16px;
+  line-height: 1.8;
+  color: rgba(0, 0, 0, 0.85);
+  font-size: 14px;
+}
+
+/* Markdown 标题样式 */
+.markdown-content :deep(h1),
+.markdown-content :deep(h2),
+.markdown-content :deep(h3),
+.markdown-content :deep(h4),
+.markdown-content :deep(h5),
+.markdown-content :deep(h6) {
+  margin-top: 24px;
+  margin-bottom: 16px;
+  font-weight: 600;
+  line-height: 1.4;
+  color: #1a1a1a;
+}
+
+.markdown-content :deep(h1) {
+  font-size: 24px;
+  border-bottom: 2px solid rgba(0, 0, 0, 0.06);
+  padding-bottom: 8px;
+}
+
+.markdown-content :deep(h2) {
+  font-size: 20px;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+  padding-bottom: 6px;
+}
+
+.markdown-content :deep(h3) {
+  font-size: 18px;
+}
+
+.markdown-content :deep(h4) {
+  font-size: 16px;
+}
+
+.markdown-content :deep(h5),
+.markdown-content :deep(h6) {
+  font-size: 14px;
+}
+
+/* Markdown 段落样式 */
+.markdown-content :deep(p) {
+  margin: 0 0 16px;
+  line-height: 1.8;
+}
+
+.markdown-content :deep(p:last-child) {
+  margin-bottom: 0;
+}
+
+/* Markdown 列表样式 */
+.markdown-content :deep(ul),
+.markdown-content :deep(ol) {
+  margin: 0 0 16px;
+  padding-left: 24px;
+}
+
+.markdown-content :deep(li) {
+  margin: 8px 0;
+  line-height: 1.8;
+}
+
+.markdown-content :deep(ul) {
+  list-style-type: disc;
+}
+
+.markdown-content :deep(ol) {
+  list-style-type: decimal;
+}
+
+.markdown-content :deep(li > ul),
+.markdown-content :deep(li > ol) {
+  margin-top: 8px;
+  margin-bottom: 8px;
+}
+
+/* Markdown 代码块样式 */
+.markdown-content :deep(pre) {
+  background: #1e1e1e;
+  border-radius: 8px;
+  padding: 16px;
+  margin: 16px 0;
+  overflow-x: auto;
+  line-height: 1.6;
+  font-size: 13px;
+  font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.markdown-content :deep(pre code) {
+  background: transparent;
+  padding: 0;
+  border-radius: 0;
+  color: #d4d4d4;
+  font-size: inherit;
+  font-family: inherit;
+  border: none;
+}
+
+.markdown-content :deep(code) {
+  background: rgba(0, 0, 0, 0.06);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 13px;
+  font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+  color: #e83e8c;
+  word-break: break-word;
+}
+
+.markdown-content :deep(pre code) {
+  background: transparent;
+  padding: 0;
+  color: inherit;
+}
+
+/* Markdown 引用样式 */
+.markdown-content :deep(blockquote) {
+  margin: 16px 0;
+  padding: 12px 16px;
+  border-left: 4px solid #1890ff;
+  background: rgba(24, 144, 255, 0.05);
+  border-radius: 4px;
+  color: rgba(0, 0, 0, 0.75);
+}
+
+.markdown-content :deep(blockquote p) {
+  margin: 0;
+}
+
+/* Markdown 链接样式 */
+.markdown-content :deep(a) {
+  color: #1890ff;
+  text-decoration: none;
+  border-bottom: 1px solid transparent;
+  transition: all 0.2s;
+}
+
+.markdown-content :deep(a:hover) {
+  color: #096dd9;
+  border-bottom-color: #096dd9;
+}
+
+/* Markdown 表格样式 */
+.markdown-content :deep(table) {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 16px 0;
+  font-size: 14px;
+}
+
+.markdown-content :deep(th),
+.markdown-content :deep(td) {
+  padding: 12px;
+  border: 1px solid rgba(0, 0, 0, 0.06);
+  text-align: left;
+}
+
+.markdown-content :deep(th) {
+  background: rgba(0, 0, 0, 0.02);
+  font-weight: 600;
+  color: #1a1a1a;
+}
+
+.markdown-content :deep(tr:nth-child(even)) {
+  background: rgba(0, 0, 0, 0.02);
+}
+
+/* Markdown 分隔线样式 */
+.markdown-content :deep(hr) {
+  margin: 24px 0;
+  border: none;
+  border-top: 1px solid rgba(0, 0, 0, 0.06);
+}
+
+/* Markdown 强调样式 */
+.markdown-content :deep(strong) {
+  font-weight: 600;
+  color: #1a1a1a;
+}
+
+.markdown-content :deep(em) {
+  font-style: italic;
+}
+
+/* Markdown 图片样式 */
+.markdown-content :deep(img) {
+  max-width: 100%;
+  height: auto;
+  border-radius: 8px;
+  margin: 16px 0;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
 }
 
 .step-item {
