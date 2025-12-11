@@ -53,13 +53,35 @@ export function createSSEConnection(
   console.log('SSE Params:', queryParams)
 
   // 创建 EventSource 实例
+  // 注意：EventSource 不支持自定义超时，但可以通过心跳检测和重连机制来处理
   const eventSource = new EventSource(fullUrl, {
     withCredentials: true,
   })
+  
+  // 添加连接保活机制：定期检查连接状态
+  let lastMessageTime = Date.now()
+  const keepAliveInterval = setInterval(() => {
+    const now = Date.now()
+    // 如果超过5分钟没有收到消息，且连接状态不是OPEN，可能已断开
+    if (now - lastMessageTime > 5 * 60 * 1000 && eventSource.readyState !== EventSource.OPEN) {
+      console.warn('SSE连接可能已断开，readyState:', eventSource.readyState)
+      clearInterval(keepAliveInterval)
+    }
+  }, 30000) // 每30秒检查一次
+  
+  // 在连接关闭时清理定时器
+  const originalClose = eventSource.close.bind(eventSource)
+  eventSource.close = () => {
+    clearInterval(keepAliveInterval)
+    originalClose()
+  }
 
   // 处理消息
   eventSource.onmessage = (event) => {
     try {
+      // 更新最后消息时间，用于连接保活检测
+      lastMessageTime = Date.now()
+      
       const message: SSEMessage = {
         data: event.data,
         event: event.type,

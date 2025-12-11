@@ -455,10 +455,13 @@ const parseCodeFiles = (content: string) => {
   const generatingFiles = new Set<string>() // 正在生成的文件
   
   // 如果内容过大，限制处理长度（避免卡死）
-  const maxContentLength = 500000 // 500KB
-  const contentToProcess = content.length > maxContentLength 
-    ? content.substring(0, maxContentLength) 
-    : content
+  // 增加到2MB，但会警告用户
+  const maxContentLength = 2 * 1024 * 1024 // 2MB
+  let contentToProcess = content
+  if (content.length > maxContentLength) {
+    console.warn('内容过大，仅处理前2MB:', content.length)
+    contentToProcess = content.substring(0, maxContentLength)
+  }
   
   // 匹配完整的代码块：```lang filename\ncode```
   const codeBlockRegex = /```(\w+)?\s*([^\n]+)?\n([\s\S]*?)```/g
@@ -1004,6 +1007,10 @@ const handleStreamComplete = (content: string) => {
 }
 
 const generateCodeStream = async (userMessage: string) => {
+  // 超时定时器需要在函数作用域内声明，以便在catch块中也能访问
+  let noDataTimeout: number | null = null
+  let lastChunkTime = Date.now() // 记录最后收到数据块的时间
+  
   try {
     // 防止重复调用：已有流或连接未关闭时直接返回
     if (streaming.value || sseConnection) {
@@ -1025,10 +1032,38 @@ const generateCodeStream = async (userMessage: string) => {
       {
         onMessage: (msg: SSEMessage) => {
           try {
+            // 更新最后收到数据的时间
+            lastChunkTime = Date.now()
+            
+            // 清除无数据超时定时器
+            if (noDataTimeout !== null) {
+              clearTimeout(noDataTimeout)
+              noDataTimeout = null
+            }
+            
+            // 重新设置无数据超时检测（10分钟无数据则认为连接可能断开）
+            noDataTimeout = window.setTimeout(() => {
+              console.warn('超过10分钟未收到数据，连接可能已断开')
+              if (sseConnection && sseConnection.readyState === EventSource.CLOSED) {
+                console.log('检测到连接已关闭，触发完成回调')
+                if (accumulatedContent || codeFiles.value.length > 0) {
+                  handleStreamComplete(accumulatedContent || '')
+                }
+                closeSSEConnection(sseConnection)
+                sseConnection = null
+                streaming.value = false
+              }
+            }, 10 * 60 * 1000) // 10分钟
+            
             const jsonData = JSON.parse(msg.data)
             const chunk = jsonData.d || ''
             if (chunk) {
               accumulatedContent += chunk
+              
+              // 如果内容过大（超过10MB），进行警告
+              if (accumulatedContent.length > 10 * 1024 * 1024) {
+                console.warn('累积内容过大，可能导致性能问题:', accumulatedContent.length)
+              }
               
               // 立即更新消息内容（这个更新很快，不需要节流）
               const aiMessage = messages.value[aiMessageIndex]
@@ -1121,17 +1156,48 @@ const generateCodeStream = async (userMessage: string) => {
         },
         onError: (error) => {
           console.error('SSE error:', error)
+          
+          // 清理超时定时器
+          if (noDataTimeout !== null) {
+            clearTimeout(noDataTimeout)
+            noDataTimeout = null
+          }
+          
+          // 检查连接状态
+          const connectionState = sseConnection?.readyState
+          console.log('SSE错误时的连接状态:', connectionState)
+          
+          // 如果连接是CLOSED状态，可能是正常关闭或超时
+          if (connectionState === EventSource.CLOSED) {
+            // 如果有内容，说明可能已经完成，只是连接关闭了
+            if (accumulatedContent || codeFiles.value.length > 0) {
+              console.log('连接关闭但有内容，尝试完成处理')
+              handleStreamComplete(accumulatedContent || '')
+              closeSSEConnection(sseConnection)
+              sseConnection = null
+              streaming.value = false
+              return
+            }
+          }
+          
           const aiMessage = messages.value[aiMessageIndex]
           if (aiMessage) {
             aiMessage.streaming = false
-            aiMessage.error = true
-            aiMessage.content = '服务器繁忙，请稍后重试'
-            aiMessage.retryPrompt = lastUserPrompt.value
+            // 如果有部分内容，不显示错误，而是显示警告
+            if (accumulatedContent && accumulatedContent.length > 100) {
+              aiMessage.error = false
+              aiMessage.content = accumulatedContent + '\n\n⚠️ 连接中断，但已生成部分内容'
+            } else {
+              aiMessage.error = true
+              aiMessage.content = '服务器繁忙，请稍后重试'
+              aiMessage.retryPrompt = lastUserPrompt.value
+            }
           }
           streaming.value = false
           closeSSEConnection(sseConnection)
           sseConnection = null
-          if (accumulatedContent) {
+          if (accumulatedContent && accumulatedContent.length > 100) {
+            // 有部分内容，尝试完成处理
             handleStreamComplete(accumulatedContent)
           } else {
             message.error('生成代码失败，请重试')
@@ -1144,6 +1210,13 @@ const generateCodeStream = async (userMessage: string) => {
             sseConnectionExists: !!sseConnection,
             hasAppInfo: !!(appInfo.value?.codeGenType && appInfo.value?.id)
           })
+          
+          // 清理超时定时器
+          if (noDataTimeout !== null) {
+            clearTimeout(noDataTimeout)
+            noDataTimeout = null
+          }
+          
           // 确保在完成时处理内容，即使内容可能为空（后端可能已经生成文件）
           if (accumulatedContent || codeFiles.value.length > 0) {
             handleStreamComplete(accumulatedContent || '')
@@ -1166,7 +1239,13 @@ const generateCodeStream = async (userMessage: string) => {
       },
     )
   } catch (error) {
+    console.error('生成代码流失败:', error)
     streaming.value = false
+    // 清理超时定时器
+    if (noDataTimeout !== null) {
+      clearTimeout(noDataTimeout)
+      noDataTimeout = null
+    }
     const aiMessageIndex = messages.value.length - 1
     const aiMessage = messages.value[aiMessageIndex]
     if (aiMessage) {
