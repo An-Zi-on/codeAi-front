@@ -47,15 +47,15 @@
                   </div>
                 </template>
                 <template v-else>
-                  <div class="guide-title">
-                    <h3>{{ extractTitle(message.content) || '生成指南' }}</h3>
-                    <p class="guide-subtitle">{{ extractSubtitle(message.content) }}</p>
-                  </div>
-                  <div class="steps-container" v-html="renderGuideSteps(message.content)"></div>
-                  <div v-if="message.streaming" class="streaming-indicator">
-                    <a-spin size="small" />
-                    <span>AI 正在生成...</span>
-                  </div>
+                <div class="guide-title">
+                  <h3>{{ extractTitle(message.content) || '生成指南' }}</h3>
+                  <p class="guide-subtitle">{{ extractSubtitle(message.content) }}</p>
+                </div>
+                <div class="steps-container" v-html="renderGuideSteps(message.content)"></div>
+                <div v-if="message.streaming" class="streaming-indicator">
+                  <a-spin size="small" />
+                  <span>AI 正在生成...</span>
+                </div>
                 </template>
               </div>
             </div>
@@ -106,12 +106,20 @@
           </div>
         </div>
         <div class="code-content">
-          <div v-if="codeFiles.length === 0" class="code-empty">
+          <div v-if="codeFiles.length === 0 && !streaming" class="code-empty">
             <a-empty description="代码生成后将显示在这里" />
+          </div>
+          <div v-else-if="codeFiles.length === 0 && streaming" class="code-empty">
+            <a-spin size="large" />
+            <p style="margin-top: 16px; color: rgba(255, 255, 255, 0.6);">正在生成代码...</p>
           </div>
           <div v-else class="code-editor">
             <div class="code-editor-header">
               <span class="code-lang">{{ currentFile?.language || 'text' }}</span>
+              <span v-if="streaming" class="code-generating-indicator">
+                <a-spin size="small" style="margin-right: 8px;" />
+                正在生成...
+              </span>
             </div>
             <pre class="code-block"><code v-html="highlightCode(currentFile?.content || '', currentFile?.language || '')"></code></pre>
           </div>
@@ -321,8 +329,9 @@ const renderGuideSteps = (content: string): string => {
 // 解析代码文件
 const parseCodeFiles = (content: string) => {
   const files: CodeFile[] = []
+  const fileMap = new Map<string, CodeFile>()
   
-  // 匹配代码块：```lang filename\ncode```
+  // 匹配完整的代码块：```lang filename\ncode```
   const codeBlockRegex = /```(\w+)?\s*([^\n]+)?\n([\s\S]*?)```/g
   let match
   
@@ -331,12 +340,43 @@ const parseCodeFiles = (content: string) => {
     const fileName = match[2]?.trim() || `file.${getDefaultExtension(language)}`
     const code = match[3].trim()
     
-    files.push({
+    fileMap.set(fileName, {
       name: fileName,
       content: code,
       language: language,
     })
   }
+  
+  // 处理未完成的代码块（实时显示）
+  // 查找所有 ``` 标记，包括未闭合的
+  const allCodeBlocks = content.match(/```[\s\S]*?$/g)
+  if (allCodeBlocks) {
+    allCodeBlocks.forEach((block) => {
+      // 提取语言和文件名
+      const headerMatch = block.match(/^```(\w+)?\s*([^\n]+)?\n/)
+      if (headerMatch) {
+        const language = headerMatch[1] || 'text'
+        const fileName = headerMatch[2]?.trim() || `file.${getDefaultExtension(language)}`
+        
+        // 提取代码内容（可能不完整）
+        const codeMatch = block.match(/^```[\w\s]*\n([\s\S]*?)(?:```|$)/)
+        if (codeMatch) {
+          const code = codeMatch[1].trim()
+          // 如果这个文件还没有完整版本，或者当前内容更长，则更新
+          if (!fileMap.has(fileName) || code.length > (fileMap.get(fileName)?.content.length || 0)) {
+            fileMap.set(fileName, {
+              name: fileName,
+              content: code,
+              language: language,
+            })
+          }
+        }
+      }
+    })
+  }
+  
+  // 将 Map 转换为数组
+  files.push(...Array.from(fileMap.values()))
   
   // 如果没有找到代码块，尝试从STEP中提取文件名
   if (files.length === 0) {
@@ -349,11 +389,13 @@ const parseCodeFiles = (content: string) => {
     }
     
     fileNames.forEach((name) => {
-      files.push({
-        name,
-        content: '// 代码生成中...',
-        language: getLanguageFromFileName(name),
-      })
+      if (!fileMap.has(name)) {
+        files.push({
+          name,
+          content: '// 代码生成中...',
+          language: getLanguageFromFileName(name),
+        })
+      }
     })
   }
   
@@ -665,7 +707,13 @@ const generateCodeStream = async (userMessage: string) => {
               }
               
               // 实时解析代码文件
-              codeFiles.value = parseCodeFiles(accumulatedContent)
+              const newFiles = parseCodeFiles(accumulatedContent)
+              codeFiles.value = newFiles
+              
+              // 如果有新文件且当前没有选中文件，自动切换到第一个文件
+              if (newFiles.length > 0 && activeFileIndex.value >= newFiles.length) {
+                activeFileIndex.value = 0
+              }
               
               scrollToBottom()
             }
@@ -678,7 +726,14 @@ const generateCodeStream = async (userMessage: string) => {
                 aiMessage.streaming = true
                 aiMessage.error = false
               }
-              codeFiles.value = parseCodeFiles(accumulatedContent)
+              const newFiles = parseCodeFiles(accumulatedContent)
+              codeFiles.value = newFiles
+              
+              // 如果有新文件且当前没有选中文件，自动切换到第一个文件
+              if (newFiles.length > 0 && activeFileIndex.value >= newFiles.length) {
+                activeFileIndex.value = 0
+              }
+              
               scrollToBottom()
             }
           }
@@ -1110,6 +1165,14 @@ onUnmounted(() => {
   color: rgba(255, 255, 255, 0.6);
   text-transform: uppercase;
   letter-spacing: 0.5px;
+}
+
+.code-generating-indicator {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 12px;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.5);
 }
 
 .code-block {
