@@ -157,7 +157,7 @@
                   已完成
                 </span>
               </div>
-              <pre class="code-block"><code v-html="highlightedCode"></code></pre>
+              <pre class="code-block" ref="codeBlockRef" @scroll="handleCodeScroll"><code v-html="highlightedCode"></code></pre>
             </div>
           </div>
           <!-- 预览视图 -->
@@ -281,8 +281,15 @@ const messages = ref<ChatMessage[]>([])
 const inputText = ref('')
 const streaming = ref(false)
 const guideContainerRef = ref<HTMLElement>()
+const codeBlockRef = ref<HTMLElement>()
 const autoGenTriggered = ref(false)
 const lastUserPrompt = ref('')
+
+// 代码滚动跟随控制
+const shouldAutoScrollCode = ref(true) // 是否应该自动滚动代码窗口
+const isUserScrolling = ref(false) // 用户是否正在手动滚动
+let codeScrollTimer: number | null = null
+let isAutoScrolling = false // 标记是否是程序自动滚动
 
 // 代码文件
 interface CodeFile {
@@ -693,6 +700,11 @@ const handleFileSwitch = (index: number) => {
     activeFileIndex.value = index
     // 清空高亮缓存，强制重新高亮新文件
     highlightCache.clear()
+    // 切换文件后，如果文件正在生成，自动滚动到底部并恢复跟随
+    if (targetFile.isGenerating) {
+      shouldAutoScrollCode.value = true
+      scrollCodeToBottom()
+    }
   })
 }
 
@@ -1056,6 +1068,9 @@ const generateCodeStream = async (userMessage: string) => {
                   }
                 }
                 
+                // 自动滚动代码窗口到生成位置
+                scrollCodeToBottom()
+                
                 scrollToBottom()
               })
             }
@@ -1095,6 +1110,9 @@ const generateCodeStream = async (userMessage: string) => {
                     activeFileIndex.value = newFiles.length - 1
                   }
                 }
+                
+                // 自动滚动代码窗口到生成位置
+                scrollCodeToBottom()
                 
                 scrollToBottom()
               })
@@ -1311,6 +1329,61 @@ const scrollToBottom = () => {
   }, 50) // 最多每50ms滚动一次
 }
 
+// 代码窗口滚动到底部 - 自动跟随生成位置
+const scrollCodeToBottom = () => {
+  if (!shouldAutoScrollCode.value) {
+    return // 如果用户手动滚动过，不自动滚动
+  }
+  
+  if (codeScrollTimer !== null) {
+    return // 如果已有待执行的滚动，跳过
+  }
+  
+  codeScrollTimer = window.setTimeout(() => {
+    nextTick(() => {
+      if (codeBlockRef.value) {
+        isAutoScrolling = true // 标记为自动滚动
+        const container = codeBlockRef.value
+        container.scrollTop = container.scrollHeight
+        // 延迟重置标记，确保滚动事件处理完成
+        setTimeout(() => {
+          isAutoScrolling = false
+        }, 100)
+      }
+    })
+    codeScrollTimer = null
+  }, 50) // 最多每50ms滚动一次
+}
+
+// 处理代码窗口滚动事件
+const handleCodeScroll = (event: Event) => {
+  // 如果是程序自动滚动，不处理
+  if (isAutoScrolling) {
+    return
+  }
+  
+  const target = event.target as HTMLElement
+  if (!target) return
+  
+  const scrollTop = target.scrollTop
+  const scrollHeight = target.scrollHeight
+  const clientHeight = target.clientHeight
+  
+  // 计算是否接近底部（允许10px的误差）
+  const threshold = 10
+  const isNearBottom = scrollHeight - scrollTop - clientHeight <= threshold
+  
+  // 如果用户滚动到底部，恢复自动跟随
+  if (isNearBottom) {
+    shouldAutoScrollCode.value = true
+    isUserScrolling.value = false
+  } else {
+    // 如果用户向上滚动（距离底部超过阈值），取消自动跟随
+    shouldAutoScrollCode.value = false
+    isUserScrolling.value = true
+  }
+}
+
 watch(
   () => messages.value.length,
   () => {
@@ -1420,6 +1493,10 @@ onUnmounted(() => {
   if (highlightTimer !== null) {
     clearTimeout(highlightTimer)
     highlightTimer = null
+  }
+  if (codeScrollTimer !== null) {
+    clearTimeout(codeScrollTimer)
+    codeScrollTimer = null
   }
 })
 </script>
