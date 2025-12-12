@@ -35,10 +35,25 @@
             >
               <!-- 用户消息 -->
               <div v-if="message.role === 'user'" class="user-message">
+                <div class="message-avatar user-avatar">
+                  <a-avatar :size="40" :src="userAvatarSrc">
+                    <template #icon>
+                      <UserOutlined />
+                    </template>
+                  </a-avatar>
+                </div>
                 <div class="user-message-content">{{ message.content }}</div>
               </div>
               <!-- AI消息：步骤指南 -->
-              <div v-else class="ai-guide">
+              <div v-else class="ai-message">
+                <div class="message-avatar ai-avatar">
+                  <a-avatar :size="40" :src="aiAvatarSrc">
+                    <template #icon>
+                      <RobotOutlined />
+                    </template>
+                  </a-avatar>
+                </div>
+                <div class="ai-guide">
                 <template v-if="message.error">
                   <div class="error-box">
                     <p class="error-text">{{ message.content || '服务器繁忙，请稍后重试' }}</p>
@@ -60,6 +75,7 @@
                   <span>AI 正在生成...</span>
                 </div>
                 </template>
+                </div>
               </div>
             </div>
           </div>
@@ -211,49 +227,144 @@
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { message } from 'ant-design-vue'
-import { ReloadOutlined } from '@ant-design/icons-vue'
+import { ReloadOutlined, UserOutlined, RobotOutlined } from '@ant-design/icons-vue'
+// 转义 HTML 函数（需要在 marked 配置前定义）
+function escapeHtmlForMarkdown(unsafe: string): string {
+  if (!unsafe) return ''
+  return String(unsafe)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;')
+}
+
 // 动态导入 marked 和 highlight.js
 let marked: any = null
 let hljs: any = null
 let markedReady = false
 
-import('marked')
-  .then((module) => {
-    marked = module.marked
-    // 配置 marked 选项
-    if (marked) {
-      marked.setOptions({
-        breaks: true, // 支持 GitHub 风格的换行
-        gfm: true, // 启用 GitHub Flavored Markdown
-        highlight: function(code: string, lang: string) {
-          if (!hljs || !lang) {
-            return code
-          }
-          try {
-            return hljs.highlight(code, { language: lang }).value
-          } catch (err) {
-            // 如果指定语言失败，尝试自动检测
-            try {
-              return hljs.highlightAuto(code).value
-            } catch (autoErr) {
-              return code
-            }
-          }
-        }
-      })
-    }
-    return import('highlight.js')
+// 先加载 highlight.js，再配置 marked
+Promise.all([
+  import('highlight.js'),
+  import('highlight.js/styles/github-dark.css').catch(() => {
+    console.warn('Highlight.js styles not found')
   })
-  .then((module) => {
-    hljs = module.default
+])
+  .then(([hljsModule]) => {
+    hljs = hljsModule.default
+    console.log('Highlight.js loaded:', !!hljs)
+    
+    // 然后加载 marked
+    return import('marked')
+  })
+  .then((markedModule) => {
+    // marked 可能是 default export 或 named export
+    marked = markedModule.marked || (markedModule as any).default?.marked || (markedModule as any).default || markedModule
+    console.log('Marked loaded:', !!marked)
+    
+    // 配置 marked 选项
+    if (marked && hljs) {
+      // 使用 marked 的新 API (v5+) 或旧 API (v4-)
+      if (typeof marked.setOptions === 'function') {
+        // marked v4 API
+        marked.setOptions({
+          breaks: true,
+          gfm: true,
+          highlight: function(code: string, lang: string) {
+            if (!hljs || !code) {
+              return escapeHtmlForMarkdown(code)
+            }
+            
+            // 如果没有指定语言，尝试自动检测
+            if (!lang || lang === 'text' || lang === 'plaintext') {
+              try {
+                const result = hljs.highlightAuto(code)
+                return result.value
+              } catch (err) {
+                console.warn('Auto highlight failed:', err)
+                return escapeHtmlForMarkdown(code)
+              }
+            }
+            
+            try {
+              // 检查语言是否支持
+              if (hljs.getLanguage(lang)) {
+                const result = hljs.highlight(code, { language: lang })
+                return result.value
+              } else {
+                // 语言不支持，尝试自动检测
+                console.warn(`Language "${lang}" not supported, trying auto-detect`)
+                const result = hljs.highlightAuto(code)
+                return result.value
+              }
+            } catch (err) {
+              // 如果指定语言失败，尝试自动检测
+              console.warn(`Highlight failed for language "${lang}":`, err)
+              try {
+                const result = hljs.highlightAuto(code)
+                return result.value
+              } catch (autoErr) {
+                console.error('Auto highlight also failed:', autoErr)
+                return escapeHtmlForMarkdown(code)
+              }
+            }
+          },
+          langPrefix: 'hljs language-'
+        })
+      } else if (marked.marked) {
+        // marked v5+ API
+        const { marked: markedInstance } = marked
+        marked = markedInstance
+        marked.setOptions({
+          breaks: true,
+          gfm: true,
+          highlight: function(code: string, lang: string) {
+            if (!hljs || !code) {
+              return escapeHtmlForMarkdown(code)
+            }
+            
+            if (!lang || lang === 'text' || lang === 'plaintext') {
+              try {
+                const result = hljs.highlightAuto(code)
+                return result.value
+              } catch (err) {
+                console.warn('Auto highlight failed:', err)
+                return escapeHtmlForMarkdown(code)
+              }
+            }
+            
+            try {
+              if (hljs.getLanguage(lang)) {
+                const result = hljs.highlight(code, { language: lang })
+                return result.value
+              } else {
+                console.warn(`Language "${lang}" not supported, trying auto-detect`)
+                const result = hljs.highlightAuto(code)
+                return result.value
+              }
+            } catch (err) {
+              console.warn(`Highlight failed for language "${lang}":`, err)
+              try {
+                const result = hljs.highlightAuto(code)
+                return result.value
+              } catch (autoErr) {
+                console.error('Auto highlight also failed:', autoErr)
+                return escapeHtmlForMarkdown(code)
+              }
+            }
+          },
+          langPrefix: 'hljs language-'
+        })
+      }
+    }
+    
     markedReady = true
-    // 导入代码高亮样式
-    import('highlight.js/styles/github-dark.css').catch(() => {
-      console.warn('Highlight.js styles not found')
-    })
+    console.log('Markdown renderer ready:', markedReady)
   })
   .catch((error) => {
-    console.warn('Markdown libraries not installed, using fallback renderer:', error)
+    console.error('Markdown libraries loading error:', error)
+    console.warn('Markdown libraries not installed, using fallback renderer')
   })
 
 import { getMyApp } from '@/api/appController'
@@ -275,6 +386,16 @@ const appId = computed(() => {
     return id
   }
   return 0
+})
+
+// AI 头像（使用 logo.jpg）
+const aiAvatarSrc = computed(() => {
+  return new URL('@/assets/logo.jpg', import.meta.url).href
+})
+
+// 用户头像
+const userAvatarSrc = computed(() => {
+  return userStore.loginUser?.userAvatar || new URL('@/assets/logo.jpg', import.meta.url).href
 })
 
 const isViewMode = computed(() => route.query.view === '1')
@@ -430,7 +551,28 @@ const renderMarkdown = (content: string): string => {
   
   try {
     // 使用 marked 渲染 Markdown
-    return marked.parse(content)
+    const html = marked.parse(content)
+    
+    // 确保代码块有正确的类名
+    // 如果 marked 没有自动添加 hljs 类，我们需要手动添加
+    if (html && hljs) {
+      // 使用 nextTick 确保 DOM 更新后再处理代码高亮
+      nextTick(() => {
+        // 查找所有代码块并应用高亮
+        const codeBlocks = document.querySelectorAll('.markdown-content pre code:not(.hljs)')
+        codeBlocks.forEach((block) => {
+          if (block instanceof HTMLElement && !block.classList.contains('hljs')) {
+            try {
+              hljs.highlightElement(block as HTMLElement)
+            } catch (err) {
+              console.warn('Failed to highlight code block:', err)
+            }
+          }
+        })
+      })
+    }
+    
+    return html
   } catch (error) {
     console.error('Markdown 渲染失败:', error)
     // 降级处理：转义 HTML 并保留换行
@@ -1783,14 +1925,33 @@ onUnmounted(() => {
 .guide-content {
   max-width: 800px;
   margin: 0 auto;
+  padding-bottom: 20px;
 }
 
 .message-section {
-  margin-bottom: 32px;
+  margin-bottom: 24px;
+  display: flex;
+  flex-direction: column;
 }
 
 .user-message {
-  margin-bottom: 24px;
+  margin-bottom: 16px;
+  display: flex;
+  justify-content: flex-end;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.message-avatar {
+  flex-shrink: 0;
+}
+
+.user-avatar {
+  order: 2;
+}
+
+.ai-avatar {
+  order: 0;
 }
 
 .user-message-content {
@@ -1800,13 +1961,20 @@ onUnmounted(() => {
   color: #ffffff;
   border-radius: 12px;
   border-bottom-right-radius: 4px;
-  max-width: 80%;
-  margin-left: auto;
+  max-width: calc(80% - 52px);
   font-size: 14px;
   line-height: 1.6;
   word-wrap: break-word;
   word-break: break-word;
   box-shadow: 0 2px 8px rgba(24, 144, 255, 0.2);
+  order: 1;
+}
+
+.ai-message {
+  margin-bottom: 16px;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
 }
 
 .ai-guide {
@@ -1814,6 +1982,9 @@ onUnmounted(() => {
   border-radius: 12px;
   padding: 16px 20px;
   border: 1px solid rgba(0, 0, 0, 0.06);
+  max-width: calc(85% - 52px);
+  flex: 1;
+  min-width: 0;
 }
 
 .guide-title h3 {
@@ -1918,7 +2089,7 @@ onUnmounted(() => {
 
 /* Markdown 代码块样式 */
 .markdown-content :deep(pre) {
-  background: #1e1e1e;
+  background: #1e1e1e !important;
   border-radius: 8px;
   padding: 16px;
   margin: 16px 0;
@@ -1927,19 +2098,36 @@ onUnmounted(() => {
   font-size: 13px;
   font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  position: relative;
 }
 
 .markdown-content :deep(pre code) {
-  background: transparent;
+  background: transparent !important;
   padding: 0;
   border-radius: 0;
-  color: #d4d4d4;
+  color: #d4d4d4 !important;
   font-size: inherit;
   font-family: inherit;
   border: none;
+  display: block;
+  overflow-x: auto;
 }
 
-.markdown-content :deep(code) {
+/* 确保 highlight.js 的样式生效 */
+.markdown-content :deep(pre code.hljs),
+.markdown-content :deep(pre code[class*="language-"]) {
+  background: transparent !important;
+  color: inherit;
+  padding: 0;
+}
+
+/* 确保所有代码块都有 hljs 类 */
+.markdown-content :deep(pre code) {
+  background: transparent !important;
+}
+
+/* 行内代码样式 */
+.markdown-content :deep(code:not(pre code)) {
   background: rgba(0, 0, 0, 0.06);
   padding: 2px 6px;
   border-radius: 4px;
@@ -1949,10 +2137,50 @@ onUnmounted(() => {
   word-break: break-word;
 }
 
+/* 确保代码块中的文本颜色可见 */
+.markdown-content :deep(pre code *),
 .markdown-content :deep(pre code) {
-  background: transparent;
-  padding: 0;
-  color: inherit;
+  color: #d4d4d4 !important;
+}
+
+/* highlight.js 语法高亮颜色覆盖（确保在深色背景下可见） */
+.markdown-content :deep(pre code .hljs-keyword),
+.markdown-content :deep(pre code .hljs-selector-tag),
+.markdown-content :deep(pre code .hljs-built_in),
+.markdown-content :deep(pre code .hljs-name),
+.markdown-content :deep(pre code .hljs-tag) {
+  color: #c792ea !important;
+}
+
+.markdown-content :deep(pre code .hljs-string),
+.markdown-content :deep(pre code .hljs-title),
+.markdown-content :deep(pre code .hljs-section),
+.markdown-content :deep(pre code .hljs-attribute),
+.markdown-content :deep(pre code .hljs-literal),
+.markdown-content :deep(pre code .hljs-template-tag),
+.markdown-content :deep(pre code .hljs-template-variable),
+.markdown-content :deep(pre code .hljs-type),
+.markdown-content :deep(pre code .hljs-addition) {
+  color: #c3e88d !important;
+}
+
+.markdown-content :deep(pre code .hljs-comment),
+.markdown-content :deep(pre code .hljs-quote),
+.markdown-content :deep(pre code .hljs-deletion),
+.markdown-content :deep(pre code .hljs-meta) {
+  color: #546e7a !important;
+}
+
+.markdown-content :deep(pre code .hljs-number),
+.markdown-content :deep(pre code .hljs-regexp),
+.markdown-content :deep(pre code .hljs-symbol),
+.markdown-content :deep(pre code .hljs-variable) {
+  color: #f78c6c !important;
+}
+
+.markdown-content :deep(pre code .hljs-function),
+.markdown-content :deep(pre code .hljs-title.function_) {
+  color: #82aaff !important;
 }
 
 /* Markdown 引用样式 */
