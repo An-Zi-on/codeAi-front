@@ -23,6 +23,15 @@ const router = createRouter({
       },
     },
     {
+      path: '/works',
+      name: 'my-works',
+      component: () => import('../views/app/MyWorksView.vue'),
+      meta: {
+        title: '我的作品',
+        showInMenu: false,
+      },
+    },
+    {
       path: '/app/chat/:id',
       name: 'app-chat',
       component: () => import('../views/app/ChatView.vue'),

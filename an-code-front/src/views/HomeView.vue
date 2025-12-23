@@ -81,7 +81,7 @@
             </div>
             <div class="work-body">
               <h3>{{ work.appName || '未命名作品' }}</h3>
-              <p>{{ work.initPrompt || '暂无简介，请通过与 AI 对话完善需求。' }}</p>
+              <p class="line-clamp-2">{{ work.initPrompt || '暂无简介，请通过与 AI 对话完善需求。' }}</p>
             </div>
           </div>
           <div v-if="showcaseWorks.length === 0" class="empty-tip">
@@ -114,7 +114,7 @@
             <div class="case-body">
               <div class="case-tag">{{ app.codeGenType?.toUpperCase() || 'APP' }}</div>
               <h3>{{ app.appName || '未命名案例' }}</h3>
-              <p>{{ app.initPrompt || '通过 AI 智能生成的案例，快速构建您需要的业务场景。' }}</p>
+              <p class="line-clamp-3">{{ app.initPrompt || '通过 AI 智能生成的案例，快速构建您需要的业务场景。' }}</p>
             </div>
           </div>
           <div v-if="featuredAppsList.length === 0" class="empty-tip">
@@ -280,7 +280,7 @@ const handleTabChange = (key: string) => {
   if (key === 'featured') {
     loadFeaturedApps()
   } else {
-    loadMyApps()
+    router.push('/works')
   }
 }
 
@@ -685,6 +685,20 @@ onMounted(() => {
   font-size: 13px;
   color: rgba(15, 23, 42, 0.7);
   line-height: 1.6;
+}
+
+.line-clamp-2 {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.line-clamp-3 {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
 .cases-grid {

@@ -142,12 +142,6 @@
               <span v-if="codeFiles.length > 1" class="tab-close" @click.stop="removeFile(idx)">×</span>
             </div>
           </div>
-          <div class="code-actions">
-            <a-button v-if="!showCodeView" type="link" size="small" @click="handleRefreshPreview">
-              <template #icon><ReloadOutlined /></template>
-              刷新预览
-            </a-button>
-          </div>
         </div>
         <!-- 代码和预览重叠显示 -->
         <div class="code-preview-container">
@@ -180,9 +174,29 @@
           <div v-show="!showCodeView" class="preview-section">
             <div class="preview-header">
               <h4>网站预览</h4>
-              <div v-if="!previewLoaded && previewUrl" class="preview-loading">
-                <a-spin size="small" />
-                <span style="margin-left: 8px; font-size: 12px; color: rgba(0, 0, 0, 0.45);">加载中...</span>
+              <div class="preview-header-right">
+                <!-- 文件状态标签 -->
+                <div class="file-status-tabs">
+                  <div
+                    v-for="fileStatus in fileLoadStatuses"
+                    :key="fileStatus.name"
+                    :class="['file-status-tab', {
+                      'status-pending': fileStatus.status === 'pending',
+                      'status-loading': fileStatus.status === 'loading',
+                      'status-completed': fileStatus.status === 'completed',
+                      'status-error': fileStatus.status === 'error'
+                    }]"
+                    :title="getFileStatusTitle(fileStatus)"
+                  >
+                    <span class="file-status-icon">{{ getFileStatusIcon(fileStatus) }}</span>
+                    <span class="file-status-name">{{ fileStatus.name }}</span>
+                    <span class="file-status-text">{{ getFileStatusText(fileStatus) }}</span>
+                  </div>
+                </div>
+                <a-button type="link" size="small" @click="handleRefreshPreview" style="margin-left: 8px;">
+                  <template #icon><ReloadOutlined /></template>
+                  刷新预览
+                </a-button>
               </div>
             </div>
             <div class="preview-content">
@@ -192,6 +206,7 @@
                 :src="previewUrl"
                 frameborder="0"
                 class="preview-iframe"
+                ref="previewIframeRef"
                 @load="handlePreviewLoad"
                 @error="handlePreviewError"
               ></iframe>
@@ -467,6 +482,52 @@ const previewLoaded = ref(false)
 const previewEnabled = ref(true)
 const showCodeView = ref(true) // 控制显示代码还是预览
 const previewKey = ref(0) // 用于强制刷新iframe
+const previewIframeRef = ref<HTMLIFrameElement | null>(null)
+
+// 文件加载状态
+interface FileLoadStatus {
+  name: string
+  status: 'pending' | 'loading' | 'completed' | 'error'
+}
+
+const fileLoadStatuses = ref<FileLoadStatus[]>([
+  { name: 'HTML', status: 'pending' },
+  { name: 'CSS', status: 'pending' },
+  { name: 'JavaScript', status: 'pending' }
+])
+
+// 获取文件状态图标
+const getFileStatusIcon = (fileStatus: FileLoadStatus) => {
+  switch (fileStatus.status) {
+    case 'completed':
+      return '✓'
+    case 'loading':
+      return '⟳'
+    case 'error':
+      return '×'
+    default:
+      return ''
+  }
+}
+
+// 获取文件状态文本
+const getFileStatusText = (fileStatus: FileLoadStatus) => {
+  switch (fileStatus.status) {
+    case 'completed':
+      return '已完成'
+    case 'loading':
+      return '加载中'
+    case 'error':
+      return '加载失败'
+    default:
+      return '等待中'
+  }
+}
+
+// 获取文件状态标题
+const getFileStatusTitle = (fileStatus: FileLoadStatus) => {
+  return `${fileStatus.name}: ${getFileStatusText(fileStatus)}`
+}
 
 // 左右面板宽度控制
 const leftPanelWidth = ref(40) // 左侧面板宽度百分比
@@ -1547,9 +1608,17 @@ const updatePreviewUrl = () => {
     // 如果URL变化，重置加载状态并更新key
     if (previewUrl.value !== newUrl) {
       previewLoaded.value = false
+      // 重置文件状态
+      fileLoadStatuses.value.forEach(file => {
+        file.status = 'pending'
+      })
       previewUrl.value = newUrl
       previewKey.value++ // 更新key强制重新加载iframe
     } else if (!previewUrl.value) {
+      // 重置文件状态
+      fileLoadStatuses.value.forEach(file => {
+        file.status = 'pending'
+      })
       previewUrl.value = newUrl
       previewKey.value++ // 更新key强制重新加载iframe
     }
@@ -1563,9 +1632,115 @@ const updatePreviewUrl = () => {
   }
 }
 
+// 检测文件加载状态
+const checkFileLoadStatus = () => {
+  if (!previewIframeRef.value || !previewUrl.value) {
+    return
+  }
+
+  try {
+    const iframe = previewIframeRef.value
+    const iframeWindow = iframe.contentWindow
+    const iframeDocument = iframe.contentDocument || (iframeWindow ? iframeWindow.document : null)
+
+    if (!iframeDocument) {
+      console.warn('无法访问 iframe 内容，可能是跨域问题')
+      // 如果无法访问 iframe 内容，至少标记 HTML 为已完成（因为 iframe load 事件已触发）
+      const htmlStatus = fileLoadStatuses.value.find(f => f.name === 'HTML')
+      if (htmlStatus) {
+        htmlStatus.status = 'completed'
+      }
+      return
+    }
+
+    // 检测 HTML 加载状态
+    const htmlStatus = fileLoadStatuses.value.find(f => f.name === 'HTML')
+    if (htmlStatus) {
+      htmlStatus.status = iframeDocument.readyState === 'complete' ? 'completed' : 'loading'
+    }
+
+    // 检测 CSS 文件加载状态
+    const cssStatus = fileLoadStatuses.value.find(f => f.name === 'CSS')
+    if (cssStatus) {
+      const stylesheets = Array.from(iframeDocument.styleSheets)
+      const linkTags = Array.from(iframeDocument.querySelectorAll('link[rel="stylesheet"]'))
+      
+      if (linkTags.length === 0) {
+        // 没有外部 CSS 文件，标记为已完成
+        cssStatus.status = 'completed'
+      } else {
+        // 检查样式表是否加载成功
+        let loadedCount = 0
+        let errorCount = 0
+        
+        stylesheets.forEach((sheet, index) => {
+          try {
+            // 尝试访问样式表规则，如果能访问说明加载成功
+            const rules = sheet.cssRules || sheet.rules
+            if (rules) {
+              loadedCount++
+            }
+          } catch (e) {
+            // 跨域或加载失败的样式表会抛出异常
+            errorCount++
+          }
+        })
+
+        if (loadedCount > 0 && errorCount === 0) {
+          cssStatus.status = 'completed'
+        } else if (errorCount > 0 && loadedCount === 0) {
+          cssStatus.status = 'error'
+        } else if (loadedCount > 0) {
+          cssStatus.status = 'completed' // 至少部分加载成功
+        }
+      }
+    }
+
+    // 检测 JavaScript 文件加载状态
+    const jsStatus = fileLoadStatuses.value.find(f => f.name === 'JavaScript')
+    if (jsStatus) {
+      const scriptTags = Array.from(iframeDocument.querySelectorAll('script[src]'))
+      
+      if (scriptTags.length === 0) {
+        // 没有外部 JS 文件，检查是否有内联脚本
+        const inlineScripts = Array.from(iframeDocument.querySelectorAll('script:not([src])'))
+        if (inlineScripts.length > 0) {
+          jsStatus.status = 'completed'
+        } else {
+          jsStatus.status = 'completed' // 没有 JS 文件也算完成
+        }
+      } else {
+        // 检查脚本是否加载完成
+        // 由于无法直接检测脚本加载状态，我们假设如果页面已加载完成，脚本也应该加载完成
+        if (iframeDocument.readyState === 'complete') {
+          // 延迟检查，给脚本一些加载时间
+          setTimeout(() => {
+            jsStatus.status = 'completed'
+          }, 500)
+        } else {
+          jsStatus.status = 'loading'
+        }
+      }
+    }
+  } catch (error) {
+    console.error('检测文件加载状态失败:', error)
+    // 如果检测失败，至少标记 HTML 为已完成
+    const htmlStatus = fileLoadStatuses.value.find(f => f.name === 'HTML')
+    if (htmlStatus) {
+      htmlStatus.status = 'completed'
+    }
+  }
+}
+
 const handlePreviewLoad = () => {
   previewLoaded.value = true
   console.log('预览页面加载完成:', previewUrl.value)
+
+  // 由于预览页面通常与当前站点不同源，无法可靠检测 iframe 内部资源加载状态
+  // 这里在 iframe load 事件触发后，直接认为所有文件加载完成
+  fileLoadStatuses.value.forEach(file => {
+    file.status = 'completed'
+  })
 }
 
 const handlePreviewError = (event?: Event) => {
@@ -1576,6 +1751,12 @@ const handlePreviewError = (event?: Event) => {
     codeGenType: appInfo.value?.codeGenType,
     appId: appInfo.value?.id
   })
+  
+  // 标记所有文件为错误状态
+  fileLoadStatuses.value.forEach(file => {
+    file.status = 'error'
+  })
+  
   message.warning('预览加载失败，请检查后端服务是否正常运行')
 }
 
@@ -1584,6 +1765,11 @@ const handleRefreshPreview = () => {
 }
 
 const refreshPreview = () => {
+  // 重置文件状态
+  fileLoadStatuses.value.forEach(file => {
+    file.status = 'pending'
+  })
+  
   if (!previewUrl.value) {
     updatePreviewUrl()
   }
@@ -2714,6 +2900,102 @@ onUnmounted(() => {
   font-size: 14px;
   font-weight: 600;
   color: #1a1a1a;
+}
+
+.preview-header-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.file-status-tabs {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.file-status-tab {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  cursor: default;
+  transition: all 0.2s;
+}
+
+.file-status-tab .file-status-icon {
+  font-weight: bold;
+  font-size: 12px;
+}
+
+.file-status-tab .file-status-name {
+  font-weight: 500;
+  color: #666;
+}
+
+.file-status-tab .file-status-text {
+  font-size: 11px;
+  color: #999;
+}
+
+.file-status-tab.status-pending {
+  background: #f5f5f5;
+  border: 1px solid #e8e8e8;
+}
+
+.file-status-tab.status-pending .file-status-text {
+  color: rgba(0, 0, 0, 0.45);
+}
+
+.file-status-tab.status-loading {
+  background: #e6f7ff;
+  border: 1px solid #91d5ff;
+}
+
+.file-status-tab.status-loading .file-status-icon {
+  color: #1890ff;
+  animation: spin 1s linear infinite;
+}
+
+.file-status-tab.status-loading .file-status-text {
+  color: #1890ff;
+}
+
+.file-status-tab.status-completed {
+  background: #f6ffed;
+  border: 1px solid #b7eb8f;
+}
+
+.file-status-tab.status-completed .file-status-icon {
+  color: #52c41a;
+}
+
+.file-status-tab.status-completed .file-status-text {
+  color: #52c41a;
+}
+
+.file-status-tab.status-error {
+  background: #fff2e8;
+  border: 1px solid #ffbb96;
+}
+
+.file-status-tab.status-error .file-status-icon {
+  color: #ff4d4f;
+}
+
+.file-status-tab.status-error .file-status-text {
+  color: #ff4d4f;
+}
+
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 /* 预览内容：可滚动 */
